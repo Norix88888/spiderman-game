@@ -120,7 +120,7 @@
 
   /* ------------------------------------------------------------- 입력 */
   const input = {
-    moveX: 0, moveZ: 0, jump: false, sprint: false,
+    moveX: 0, moveZ: 0, jump: false, jumpHeld: false, sprint: false,
     swingHeld: false, swingPressed: false, zipPressed: false,
     mouseX: 0, mouseY: 0
   };
@@ -130,7 +130,7 @@
   const touch = {
     stickId: null, ox: 0, oy: 0, mx: 0, mz: 0, mag: 0,
     lookId: null, lx: 0, ly: 0,
-    swing: false, dive: false
+    swing: false, dive: false, jumpHeld: false
   };
   const STICK_R = 52;
 
@@ -213,7 +213,8 @@
     btn('bSwing', () => { input.swingHeld = true; input.swingPressed = true; },
       () => { input.swingHeld = false; });
     btn('bZip', () => { input.zipPressed = true; });
-    btn('bJump', () => { input.jump = true; });
+    btn('bJump', () => { input.jump = true; touch.jumpHeld = true; },
+      () => { touch.jumpHeld = false; });
     btn('bDive', () => { touch.dive = true; }, () => { touch.dive = false; });
     btn('bSuit', () => { togglePicker(); });
     btn('bPause', () => { setPaused(!paused); });
@@ -274,7 +275,9 @@
     input.moveZ = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
     input.moveX = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
     input.sprint = !!(keys.ShiftLeft || keys.ShiftRight);
+    input.jumpHeld = !!keys.Space;
     if (IS_TOUCH) {
+      if (touch.jumpHeld) input.jumpHeld = true;
       if (touch.stickId !== null) {
         input.moveX = touch.mx;
         input.moveZ = touch.mz;

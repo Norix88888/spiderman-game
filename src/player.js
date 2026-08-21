@@ -10,11 +10,16 @@
     RUN: 9.5, SPRINT: 17.5,
     ACC_G: 60, ACC_A: 18,
     JUMP: 12.5,
-    MAXSPD: 78,
+    JUMP_HOLD: 26,        // 점프 키를 길게 누르면 더 높이 (가변 점프)
+    JUMP_HOLD_T: 0.3,
+    MAXSPD: 84,
     ROPE_MIN: 9, ROPE_MAX: 105,
     REEL: 16,
     PUMP: 26,
+    AUTO_PUMP: 7,         // 하강 중 자동으로 줄을 당겨 진자에 에너지를 넣는다
     ZIP_SPEED: 62,
+    PL_UP: 9, PL_ARC: 12, // 포인트 런치 (스윙 최저점에서 점프)
+    WALLRUN: 12,
     R: 0.42
   };
 
@@ -65,6 +70,7 @@
       zip: { on: false, target: new V3(), t: 0 },
       landCool: 0,
       airTime: 0,
+      jumpHold: 0, wallRunT: 0, pointLaunch: 0,
       speedKmh: 0,
       best: 0,
       lastAnchorMiss: 0,
@@ -88,6 +94,18 @@
     /* -------------------------------------------------- 부착점 탐색 */
     const YAWS = [0, 0.26, -0.26, 0.52, -0.52, 0.8, -0.8];
     const PITCHES = [0.85, 0.62, 1.1, 0.42];
+
+    /* 빠르게 날고 있으면 카메라가 아니라 '진행 방향' 기준으로 부착점을 찾는다.
+       (PS 스파이더맨처럼 시선을 돌려도 스윙 흐름이 안 끊기게) */
+    function aimYaw() {
+      const hs = Math.hypot(p.vel.x, p.vel.z);
+      if (hs < 12) return p.camYaw;
+      let d = Math.atan2(p.vel.x, p.vel.z) - p.camYaw;
+      while (d > Math.PI) d -= Math.PI * 2;
+      while (d < -Math.PI) d += Math.PI * 2;
+      return p.camYaw + d * Math.min(0.6, (hs - 12) / 40);
+    }
+
     function findAnchor(origin, camYaw, out) {
       let bestScore = -1e9, found = false;
       for (let pi = 0; pi < PITCHES.length; pi++) {
@@ -100,10 +118,16 @@
           if (hit2.y < origin.y + 5) continue;
           const d = hit2.dist;
           if (d < 12) continue;
-          const s = -Math.abs(d - 48) * 0.55
+          // 이 줄로 스윙하면 호의 최저점이 어디인가 → 바닥에 처박히는 부착점은 감점
+          const lowPoint = hit2.y - d;
+          let s = -Math.abs(d - 48) * 0.55
             - Math.abs(YAWS[yi]) * 26
             - Math.abs(pitch - 0.8) * 14
             + (hit2.y - origin.y) * 0.28;
+          if (lowPoint < 14) s -= (14 - lowPoint) * 2.2;
+          // 옥상(위를 향한 면)에 걸면 그 건물을 넘어가며 탈 수 있다.
+          // 벽면에 걸면 호가 그 벽을 파고들어 갈려버린다 → 크게 선호
+          if (hit2.ny > 0.5) s += 34;
           if (s > bestScore) {
             bestScore = s; found = true;
             out.set(hit2.x, hit2.y, hit2.z);
@@ -117,7 +141,7 @@
     /* -------------------------------------------------- 웹 발사 */
     function fireWeb() {
       _a.copy(p.pos); _a.y += 1.5;
-      if (findAnchor(_a, p.camYaw, _b)) {
+      if (findAnchor(_a, aimYaw(), _b)) {
         p.web.on = true;
         p.web.anchor.copy(_b);
         p.web.len = Math.max(C.ROPE_MIN, _a.distanceTo(_b));
@@ -219,6 +243,7 @@
     p.update = function (dt, input) {
       p.time += dt;
       if (p.lastAnchorMiss > 0) p.lastAnchorMiss -= dt;
+      if (p.pointLaunch > 0) p.pointLaunch -= dt;
 
       // 카메라 각도
       p.camYaw -= input.mouseX * 0.0024;
@@ -265,14 +290,25 @@
         _b.set(0, 1, 0).addScaledVector(_a, -_a.y).normalize();   // 벽면상의 위쪽
         _c.crossVectors(_b, _a).normalize();                       // 벽면상의 오른쪽
         const climbUp = input.moveZ, climbSide = input.moveX;
-        const sp = input.sprint ? 11 : 6.5;
-        p.vel.set(0, 0, 0)
-          .addScaledVector(_b, climbUp * sp)
+        // 벽 달리기: 위로 오를 땐 확실히 빠르게 (PS 스파이더맨의 월러너)
+        const sp = (input.sprint ? C.WALLRUN : 7) * (climbUp > 0 ? 1.25 : 1);
+        p.wallRunT = climbUp > 0 ? Math.min(1.6, (p.wallRunT || 0) + dt)
+          : Math.max(0, (p.wallRunT || 0) - dt * 1.4);
+        // 입력이 만드는 목표 속도
+        _t.set(0, 0, 0)
+          .addScaledVector(_b, climbUp * sp * (1 + p.wallRunT * 0.35))
           .addScaledVector(_c, -climbSide * sp);
+        // 붙기 직전의 운동량을 바로 죽이지 않고 서서히 목표 속도로 수렴시킨다
+        p.vel.lerp(_t, 1 - Math.exp(-5 * dt));
         p.vel.addScaledVector(_a, -2.5);      // 벽에 붙어있게
         p.pos.addScaledVector(p.vel, dt);
         if (input.jump) {
-          p.vel.copy(_a).multiplyScalar(12).add(new V3(0, 11, 0));
+          // 벽차기: 오래 달려 올랐을수록 더 멀리 튕겨 나간다
+          const boost = 1 + (p.wallRunT || 0) * 0.5;
+          p.vel.copy(_a).multiplyScalar(13 * boost);
+          p.vel.y += 13 * boost;
+          p.wallRunT = 0;
+          p.jumpHold = C.JUMP_HOLD_T;
           p.state = 'air';
           if (NS.sfx) NS.sfx.jump();
         }
@@ -294,7 +330,17 @@
           p.web.grow = Math.min(1, p.web.t / 0.075);
           // 줄 길이 조절
           if (input.moveZ > 0.1) p.web.len = Math.max(C.ROPE_MIN, p.web.len - C.REEL * dt);
-          if (input.moveZ < -0.1) p.web.len = Math.min(C.ROPE_MAX, p.web.len + C.REEL * 0.8 * dt);
+          else if (input.moveZ < -0.1) p.web.len = Math.min(C.ROPE_MAX, p.web.len + C.REEL * 0.8 * dt);
+          // 자동 펌핑: 줄 길이를 건드리면 진자가 아니라 윈치가 되어 속도를 잃는다.
+          // 그래서 '하강 중 접선 방향 가속'으로 에너지를 넣는다(실제 그네 타기와 같은 효과).
+          if (p.vel.y < -1) {
+            _t.copy(p.vel);
+            const L = _t.length();
+            if (L > 2) {
+              _t.multiplyScalar(1 / L);
+              p.vel.addScaledVector(_t, C.AUTO_PUMP * dt);
+            }
+          }
           // 좌우 조향
           p.vel.addScaledVector(_r, input.moveX * 22 * dt);
           // 펌핑 가속
@@ -304,6 +350,22 @@
               _t.normalize();
               p.vel.addScaledVector(_t, C.PUMP * dt);
             }
+          }
+          // ---- 포인트 런치: 스윙 중 점프. 호의 최저점에 가까울수록 크게 솟는다 ----
+          if (input.jump) {
+            _a.subVectors(p.pos, p.web.anchor);
+            const L = _a.length() || 1;
+            const under = Math.max(0, -_a.y / L);      // 앵커 바로 아래면 1
+            releaseWeb(false);
+            p.vel.y = Math.max(p.vel.y, 0) + C.PL_UP + under * C.PL_ARC;
+            const hs = Math.hypot(p.vel.x, p.vel.z);
+            if (hs > 1) {
+              const k = 1 + under * 0.22;
+              p.vel.x *= k; p.vel.z *= k;
+            }
+            p.pointLaunch = 0.45;
+            p.state = 'air';
+            if (NS.sfx) NS.sfx.jump();
           }
         } else {
           // 공중 제어
@@ -324,8 +386,17 @@
             p.vel.y = C.JUMP * (input.sprint ? 1.15 : 1);
             p.grounded = false;
             p.state = 'air';
+            p.jumpHold = C.JUMP_HOLD_T;
             if (NS.sfx) NS.sfx.jump();
           }
+        }
+
+        // 가변 점프 높이 — 누르고 있는 동안 조금 더 솟는다
+        if (p.jumpHold > 0) {
+          if (input.jumpHeld && p.vel.y > 0) {
+            p.vel.y += C.JUMP_HOLD * dt;
+            p.jumpHold -= dt;
+          } else p.jumpHold = 0;
         }
 
         // 다이브(공중 Shift): 급강하 가속
@@ -378,13 +449,19 @@
       } else {
         p.airTime += dt;
         if (p.state === 'ground') p.state = 'air';
+        // 스윙 중 벽에 갈리면 줄을 놓는다 (안 그러면 벽에 붙어 속도가 0이 된다)
+        if (col.wall && p.state === 'swing' && p.web.on) releaseWeb(false);
         // 벽 붙기
         if (col.wall && p.state !== 'zip' && p.pos.y > 2.5 && !p.web.on) {
           const into = -(p.vel.x * col.normal.x + p.vel.z * col.normal.z);
           if (into > -2) {
             p.wallN.copy(col.normal);
             p.state = 'wall';
-            p.vel.set(0, 0, 0);
+            // 속도를 죽이지 않고 벽면에 투영해 보존 → 그대로 벽을 타고 달린다
+            const vn = p.vel.dot(p.wallN);
+            p.vel.addScaledVector(p.wallN, -vn);
+            p.vel.multiplyScalar(0.78);
+            p.wallRunT = Math.min(1.2, p.vel.length() / 30);
             sparks.burst(p.pos, 6, 0.6, 3);
             if (NS.sfx) NS.sfx.stick();
           }
