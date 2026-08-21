@@ -80,7 +80,7 @@
       uPulse: { value: 0 },          // 0~1 화이트 플래시
       uTint: { value: null },        // THREE.Color (create 에서 주입)
       uTintAmount: { value: 0 },
-      uVignette: { value: 0.62 },
+      uVignette: { value: 0.34 },
       uAberration: { value: 1 },
       uGrain: { value: 0.03 },
       uShake: { value: 0 },
@@ -423,12 +423,12 @@
         bloomPass.enabled = true;
         fxaaPass.enabled = true;
         kBloom = mobile ? 0.35 : 0.42;
-        kAberration = 0.6; kGrain = 0.02; kVignette = 0.58; kSpeedFx = 0.7;
+        kAberration = 0.6; kGrain = 0.02; kVignette = 0.30; kSpeedFx = 0.7;
       } else {                        // 최고
         bloomPass.enabled = true;
         fxaaPass.enabled = true;
         kBloom = mobile ? 0.35 : 0.50;
-        kAberration = 1.0; kGrain = 0.03; kVignette = 0.62; kSpeedFx = 1.0;
+        kAberration = 1.0; kGrain = 0.03; kVignette = 0.34; kSpeedFx = 1.0;
       }
       if (level > 0) bloomPass.strength = kBloom;
       u.uAberration.value = kAberration;

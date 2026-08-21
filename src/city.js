@@ -431,7 +431,7 @@
 
     /* --- 하늘 / 조명 --- */
     const sky = makeSky(scene);
-    const sun = new THREE.DirectionalLight(0xffb07a, 0.85);
+    const sun = new THREE.DirectionalLight(0xffc49a, 1.05);
     sun.position.set(60, 90, -40);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -444,8 +444,8 @@
     scene.add(sun);
     scene.add(sun.target);
 
-    scene.add(new THREE.HemisphereLight(0x33507f, 0x0b0d13, 0.34));
-    scene.add(new THREE.AmbientLight(0x161c30, 0.3));
+    scene.add(new THREE.HemisphereLight(0x4b6ea8, 0x14171f, 0.62));
+    scene.add(new THREE.AmbientLight(0x28304a, 0.55));
 
     scene.fog = new THREE.FogExp2(0x141a2b, 0.0019);
 

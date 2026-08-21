@@ -75,6 +75,7 @@
       best: 0,
       lastAnchorMiss: 0,
       suitId: suitId,
+      sens: 1.7,            // 시점 회전 감도 배수
       mods: null            // abilities.js 의 보정값 (game.js 가 연결)
     };
 
@@ -246,9 +247,9 @@
       if (p.lastAnchorMiss > 0) p.lastAnchorMiss -= dt;
       if (p.pointLaunch > 0) p.pointLaunch -= dt;
 
-      // 카메라 각도
-      p.camYaw -= input.mouseX * 0.0024;
-      p.camPitch -= input.mouseY * 0.0024;
+      // 카메라 각도 (감도는 p.sens 로 조절 — 게임에서 [ ] 키)
+      p.camYaw -= input.mouseX * 0.0024 * p.sens;
+      p.camPitch -= input.mouseY * 0.0024 * p.sens;
       p.camPitch = Math.max(-1.15, Math.min(1.0, p.camPitch));
 
       const cy = Math.cos(p.camYaw), sy = Math.sin(p.camYaw);

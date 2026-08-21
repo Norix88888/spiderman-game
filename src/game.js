@@ -184,8 +184,8 @@
           touch.mz = -dy / STICK_R;
           touch.mag = Math.min(1, d / STICK_R);
         } else if (t.identifier === touch.lookId) {
-          input.mouseX += (t.clientX - touch.lx) * 2.1;
-          input.mouseY += (t.clientY - touch.ly) * 2.1;
+          input.mouseX += (t.clientX - touch.lx) * 2.6;
+          input.mouseY += (t.clientY - touch.ly) * 2.6;
           touch.lx = t.clientX; touch.ly = t.clientY;
         }
       }
@@ -255,6 +255,17 @@
       if (e.code === 'KeyR') player && player.respawn();
       if (e.code === 'KeyG') cycleQuality();
       if (e.code === 'KeyM') toast(sfx.toggleMute() ? '🔇 소리 끔' : '🔊 소리 켬');
+      // 시점 감도 / 화면 밝기 조절
+      if (e.code === 'BracketLeft' && player) {
+        player.sens = Math.max(0.4, player.sens - 0.25);
+        toast('시점 감도 ' + player.sens.toFixed(2) + 'x');
+      }
+      if (e.code === 'BracketRight' && player) {
+        player.sens = Math.min(4, player.sens + 0.25);
+        toast('시점 감도 ' + player.sens.toFixed(2) + 'x');
+      }
+      if (e.code === 'Minus' || e.code === 'NumpadSubtract') setBright(-0.1);
+      if (e.code === 'Equal' || e.code === 'NumpadAdd') setBright(0.1);
       if (e.code === 'KeyF') doPunch();
       if (e.code === 'KeyE') doYank();
       if (e.code === 'KeyQ') doAbility();
@@ -291,12 +302,20 @@
       if (el.picker.classList.contains('on')) return;
       const locked = document.pointerLockElement === el.canvas;
       const mx = e.movementX || 0, my = e.movementY || 0;
-      input.mouseX += locked ? mx : mx * 0.8;
-      input.mouseY += locked ? my : my * 0.8;
+      input.mouseX += mx;
+      input.mouseY += my;
     });
     // 창을 벗어났을 때만 일시정지 (포인터 잠금 해제로는 멈추지 않는다)
     window.addEventListener('blur', () => { if (started) setPaused(true); });
     window.addEventListener('resize', onResize);
+  }
+
+  /* 화면 밝기 (노출값) — 기기/모니터마다 체감이 달라서 조절할 수 있게 둔다 */
+  function setBright(delta) {
+    if (!renderer) return;
+    renderer.toneMappingExposure =
+      Math.max(0.5, Math.min(2.2, renderer.toneMappingExposure + delta));
+    toast('밝기 ' + renderer.toneMappingExposure.toFixed(2));
   }
 
   /* ------------------------------------------------- 전투 / 능력 액션 */
@@ -409,7 +428,7 @@
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.82;
+    renderer.toneMappingExposure = 1.15;
     renderer.shadowMap.enabled = !MOBILE;
     renderer.shadowMap.type = MOBILE ? THREE.BasicShadowMap : THREE.PCFSoftShadowMap;
 
