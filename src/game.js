@@ -272,9 +272,14 @@
 
     el.canvas.addEventListener('mousedown', e => {
       if (!started || IS_TOUCH) return;
-      if (document.pointerLockElement !== el.canvas) { el.canvas.requestPointerLock(); return; }
+      // 마우스 잠금은 '요청만' 하고, 잠기지 않았어도 거미줄은 반드시 발사한다.
+      // (예전엔 여기서 return 해버려서 잠금이 안 걸리면 영영 발사가 안 됐다)
+      if (document.pointerLockElement !== el.canvas) {
+        try { el.canvas.requestPointerLock(); } catch (err) { }
+      }
+      if (paused) setPaused(false);
       if (e.button === 0) { input.swingHeld = true; input.swingPressed = true; }
-      if (e.button === 2) input.zipPressed = true;
+      if (e.button === 2) { input.zipPressed = true; e.preventDefault(); }
     });
     window.addEventListener('mouseup', e => {
       if (e.button === 0) input.swingHeld = false;
