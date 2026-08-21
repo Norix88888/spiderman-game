@@ -171,6 +171,30 @@
   #hurt{position:absolute; inset:0; opacity:0; pointer-events:none;
     background:radial-gradient(ellipse at center, rgba(255,0,20,0) 40%, rgba(255,0,24,.55) 100%)}
 
+  /* 포커스 게이지 */
+  #hpWrap .hpLbl b{opacity:.95; font-weight:800; letter-spacing:0}
+  #fcBar{height:7px; border-radius:4px; background:rgba(255,255,255,.13); overflow:hidden}
+  #fcFill{height:100%; width:0%; border-radius:4px; background:#4fe6ff;
+    transition:width .15s, background .2s; box-shadow:0 0 12px rgba(79,230,255,.55)}
+  #fcFill.full{animation:fcPulse .9s infinite}
+  @keyframes fcPulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.9)}}
+
+  /* 스파이더 센스 */
+  #senseWrap{position:absolute; left:50%; top:38%; transform:translateX(-50%);
+    opacity:0; transition:opacity .1s; pointer-events:none}
+  #senseWrap.on{opacity:1}
+  #sense{padding:7px 16px; border-radius:999px; font-size:12px; font-weight:800;
+    background:rgba(255,214,60,.16); border:1px solid rgba(255,214,60,.6); color:#ffd93c;
+    text-shadow:0 0 12px rgba(255,214,60,.7); animation:blip .45s infinite}
+  #sense kbd{padding:1px 5px; border-radius:4px; background:rgba(255,255,255,.2);
+    font-family:inherit; font-size:11px}
+
+  /* 콤보 */
+  #comboBig{position:absolute; right:26px; top:96px; text-align:right; font-size:30px;
+    font-weight:900; color:#ffd166; opacity:0; transition:opacity .2s, transform .12s;
+    text-shadow:0 3px 18px rgba(0,0,0,.7)}
+  #comboBig.on{opacity:1}
+
   /* ================= 터치 컨트롤 ================= */
   #touch{position:fixed; inset:0; z-index:15; display:none; pointer-events:none}
   body.touch #touch{display:block}
@@ -202,6 +226,13 @@
   #bZip{right:138px; bottom:150px; width:70px; height:70px; font-size:13px}
   #bJump{right:140px; bottom:56px; width:70px; height:70px; font-size:13px}
   #bDive{right:36px; bottom:216px; width:70px; height:70px; font-size:13px}
+  #bPunch{right:236px; bottom:96px; width:66px; height:66px; font-size:13px}
+  #bYank{right:236px; bottom:174px; width:60px; height:60px; font-size:12px}
+  #bDodge{right:150px; bottom:230px; width:60px; height:60px; font-size:12px;
+    border-color:rgba(255,214,60,.55)}
+  #bPower{right:44px; bottom:296px; width:64px; height:64px; font-size:13px;
+    border-color:rgba(79,230,255,.6);
+    background:linear-gradient(180deg, rgba(20,80,110,.62), rgba(8,30,44,.5))}
   #bSuit{right:22px; top:96px; width:56px; height:56px; font-size:12px}
   #bPause{right:22px; top:162px; width:56px; height:56px; font-size:12px}
   #bMute{right:22px; top:228px; width:56px; height:56px; font-size:17px}
@@ -230,7 +261,14 @@
     #hpWrap{left:10px; bottom:auto; top:156px; width:118px; padding:5px 8px}
     #hpWrap .hpLbl{font-size:8px; letter-spacing:2px; margin-bottom:3px}
     #hpBar{height:5px}
-    #bSuit{top:auto; bottom:296px; right:44px}
+    #bSuit{top:auto; bottom:262px; right:26px; width:46px; height:46px; font-size:10px}
+    #bPunch{right:196px; bottom:80px; width:56px; height:56px; font-size:11px}
+    #bYank{right:196px; bottom:146px; width:52px; height:52px; font-size:10px}
+    #bDodge{right:122px; bottom:196px; width:52px; height:52px; font-size:10px}
+    #bPower{right:30px; bottom:196px; width:56px; height:56px; font-size:11px}
+    #senseWrap{top:30%}
+    #sense{font-size:10px; padding:5px 11px}
+    #comboBig{font-size:20px; top:62px; right:12px}
     #bPause{top:10px; right:110px; width:44px; height:44px; font-size:10px}
     #bMute{top:10px; right:160px; width:44px; height:44px; font-size:14px}
     #logo{font-size:34px}
@@ -305,8 +343,11 @@
     <div class="g"><kbd>좌클릭</kbd>거미줄 스윙</div>
     <div class="g"><kbd>우클릭</kbd>범인 포박 / 웹 짚</div>
     <div class="g"><kbd>Shift</kbd>다이브</div>
+    <div class="g"><kbd>F</kbd>주먹</div>
+    <div class="g"><kbd>E</kbd>당기기</div>
+    <div class="g"><kbd>C</kbd>회피</div>
+    <div class="g"><kbd>Q</kbd>슈트 능력</div>
     <div class="g"><kbd>Tab</kbd>슈트</div>
-    <div class="g"><kbd>M</kbd>소리</div>
   </div>
 
   <div id="toast"></div>
@@ -320,7 +361,12 @@
   <div id="hpWrap" class="panel">
     <div class="hpLbl">체력</div>
     <div id="hpBar"><div id="hpFill"></div></div>
+    <div class="hpLbl" style="margin-top:8px">포커스 <b id="abName">—</b></div>
+    <div id="fcBar"><div id="fcFill"></div></div>
   </div>
+
+  <div id="senseWrap"><div id="sense">스파이더 센스!  <kbd>C</kbd> 회피</div></div>
+  <div id="comboBig"></div>
 
   <div id="hurt"></div>
 </div>
@@ -331,6 +377,10 @@
   <div class="tbtn" id="bZip">포박<small>WEB SHOT</small></div>
   <div class="tbtn" id="bJump">점프</div>
   <div class="tbtn" id="bDive">다이브</div>
+  <div class="tbtn" id="bPunch">주먹</div>
+  <div class="tbtn" id="bYank">당기기</div>
+  <div class="tbtn" id="bPower">능력</div>
+  <div class="tbtn" id="bDodge">회피</div>
   <div class="tbtn" id="bSuit">슈트</div>
   <div class="tbtn" id="bPause">| |</div>
   <div class="tbtn" id="bMute">🔊</div>
@@ -381,6 +431,9 @@
 <script src="src/web.js"></script>
 <script src="src/player.js"></script>
 <script src="src/crime.js"></script>
+<script src="src/combat.js"></script>
+<script src="src/abilities.js"></script>
+<script src="src/postfx.js"></script>
 <script src="src/game.js"></script>
 </body>
 </html>

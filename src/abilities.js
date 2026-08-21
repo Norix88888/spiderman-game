@@ -56,6 +56,16 @@
   /* --------------------------------------------------------- 공용 버퍼 */
   const _v = new V3(), _dir = new V3();
   const _scratch = [];        // 적 임시 목록 (재사용)
+  const _hit = [];            // 명중 표시 (재사용 — 매 발동마다 new Array 금지)
+
+  /* 유한값 가드 —— NaN 이 player.vel / Object3D.matrix 로 한 번이라도 새면
+     그 프레임부터 카메라·컬링·도시가 전부 NaN 이 된다. 경계에서 전부 막는다. */
+  const isNum = (typeof Number.isFinite === 'function')
+    ? Number.isFinite
+    : function (v) { return typeof v === 'number' && isFinite(v); };
+  function fin(v, d) { return isNum(v) ? v : d; }
+  function vecFin(v) { return !!v && isNum(v.x) && isNum(v.y) && isNum(v.z); }
+  function normId(id) { return (id && DEF[id]) ? id : 'classic'; }
 
   /* ---------------------------------------------------- 이펙트 지오메트리 */
   /* 방사형 거미줄 다발: n 갈래 리본을 하나의 지오메트리로 (반지름 1 기준) */
@@ -287,12 +297,16 @@
         m.depthWrite = false;
       }
     }
+    /* ★ suits.js 는 슈트별 재질을 캐시해 공유한다. 여기서 건드린 재질을 못 돌려놓으면
+       그 슈트는 게임이 끝날 때까지 반투명으로 남는다. 무조건·전부 되돌린다. */
     function fadeOff() {
       for (let i = 0; i < fadeMats.length; i++) {
         const m = fadeMats[i], s = fadeSave[i];
+        if (!m || !s) continue;
         m.transparent = s.t;
         m.opacity = s.o;
         m.depthWrite = s.d;
+        m.needsUpdate = true;
       }
       fadeMats.length = 0;
       fadeSave.length = 0;
@@ -304,7 +318,7 @@
       active: false,
       remain: 0,
       ready: false,
-      suitId: player.suitId || 'classic',
+      suitId: normId(player.suitId),
       name: '', desc: '', color: '#ffffff',
       fxPulse: 0,
       fxTint: null,
@@ -320,9 +334,10 @@
       m.glide = false; m.invisible = false; m.dashImpulse = null; m.damageMul = 1;
     }
 
-    let def = DEF[ctrl.suitId] || DEF.classic;
+    let def = DEF[ctrl.suitId];
     function applyDef() {
-      def = DEF[ctrl.suitId] || DEF.classic;
+      ctrl.suitId = normId(ctrl.suitId);   // def 와 id 분기가 항상 같은 슈트를 가리키게
+      def = DEF[ctrl.suitId];
       ctrl.name = def.name;
       ctrl.desc = def.desc;
       ctrl.color = def.color;
@@ -333,66 +348,96 @@
     /* 카메라 각도를 한 순간만 적 쪽으로 돌려 crime.tryWebShot() 을 호출한다.
        이렇게 하면 점수·콤보·코쿤·현장 완료 처리가 전부 crime 쪽 규칙대로 돈다. */
     const dashVec = new V3();
+    const MAX_SHOTS = 12;              // 폭주 방지 상한
     function shootAt(e, times) {
       if (!crime || !crime.tryWebShot) return false;
+      if (!e || e.arrested || e.dead || !vecFin(e.pos) || !vecFin(player.pos)) return false;
+      const n = Math.min(MAX_SHOTS, Math.max(1, Math.floor(fin(times, 1))));
+      /* 카메라를 잠깐 훔쳐 쓰므로 어떤 예외가 나도 finally 로 반드시 원복 */
       const oy = player.camYaw, op = player.camPitch;
-      let hit = false;
+      const w0 = fin(e.webs, 0);
       try {
         _v.set(e.pos.x - player.pos.x,
           (e.pos.y + 1.0) - (player.pos.y + 1.5),
           e.pos.z - player.pos.z);
-        const hz = Math.hypot(_v.x, _v.z) || 0.0001;
+        const hz = Math.hypot(_v.x, _v.z) || 1e-4;
         player.camYaw = Math.atan2(_v.x, _v.z);
         player.camPitch = Math.atan2(_v.y, hz);
-        for (let k = 0; k < times; k++) {
+        for (let k = 0; k < n; k++) {
           if (e.arrested || e.dead) break;
+          const before = fin(e.webs, 0);
           if (!crime.tryWebShot()) break;
-          hit = true;
+          /* 조준 스코어 때문에 다른 적이 맞았을 수 있다 — 헛방이면 중단 */
+          if (fin(e.webs, 0) === before && !e.arrested) break;
         }
       } finally {
         player.camYaw = oy;
         player.camPitch = op;
       }
-      return hit;
+      return e.arrested || fin(e.webs, 0) > w0;
     }
 
     /* 반경 안의 범인에게 거미줄. shots < 0 이면 포박될 때까지 */
     function aoeWeb(radius, shots) {
-      if (!crime || !crime.enemies) return 0;
+      if (!crime || !crime.enemies || !vecFin(player.pos)) return 0;
       _scratch.length = 0;
-      const list = crime.enemies;
-      const r2 = radius * radius;
-      for (let i = 0; i < list.length; i++) {
-        const e = list[i];
-        if (!e || e.arrested || e.dead || !e.pos) continue;
-        const dx = e.pos.x - player.pos.x;
-        const dy = e.pos.y - player.pos.y;
-        const dz = e.pos.z - player.pos.z;
-        if (dx * dx + dy * dy + dz * dz > r2) continue;
-        _scratch.push(e);
-      }
       let n = 0;
-      for (let i = 0; i < _scratch.length; i++) {
-        const e = _scratch[i];
-        const need = shots < 0
-          ? Math.max(1, ((e.T && e.T.hp) || 3) - (e.webs || 0))
-          : shots;
-        if (shootAt(e, need)) n++;
+      try {
+        /* crime.enemies 는 closeSite() 에서 splice 된다.
+           반드시 스냅샷을 뜬 뒤에 쏜다 (순회 중 splice 금지) */
+        const list = crime.enemies;
+        const r2 = radius * radius;
+        for (let i = 0; i < list.length; i++) {
+          const e = list[i];
+          if (!e || e.arrested || e.dead || !vecFin(e.pos)) continue;
+          const dx = e.pos.x - player.pos.x;
+          const dy = e.pos.y - player.pos.y;
+          const dz = e.pos.z - player.pos.z;
+          if (dx * dx + dy * dy + dz * dz > r2) continue;
+          _scratch.push(e);
+        }
+        /* 겹쳐 선 적끼리 조준을 뺏길 수 있어서 제압형(shots<0)은 2회까지 훑는다.
+           패스 수를 상수로 묶어 무한루프 가능성을 없앤다. */
+        _hit.length = _scratch.length;
+        for (let i = 0; i < _hit.length; i++) _hit[i] = false;
+        const passes = shots < 0 ? 2 : 1;
+        for (let p = 0; p < passes; p++) {
+          for (let i = 0; i < _scratch.length; i++) {
+            const e = _scratch[i];
+            /* 스냅샷 이후 죽거나(dead) 체포됐을 수 있다 — 매번 재확인 */
+            if (e.arrested || e.dead) continue;
+            const hp = fin(e.T && e.T.hp, 3);
+            const need = shots < 0
+              ? Math.max(1, hp - fin(e.webs, 0))
+              : fin(shots, 1);
+            if (shootAt(e, need)) _hit[i] = true;
+          }
+        }
+        for (let i = 0; i < _hit.length; i++) if (_hit[i]) n++;
+      } finally {
+        _scratch.length = 0;   // 예외가 나도 죽은 적 참조를 붙들지 않는다
+        _hit.length = 0;
       }
-      _scratch.length = 0;
       return n;
     }
 
     /* 시선 방향 임펄스. player.vel 에 직접 더하고 1프레임 동안 mods 로도 노출한다 */
     let dashHold = 0;
     function launch(power, upBias) {
-      const cp = Math.cos(player.camPitch || 0);
-      _dir.set(Math.sin(player.camYaw) * cp, Math.sin(player.camPitch || 0),
-        Math.cos(player.camYaw) * cp);
-      if (upBias) _dir.y = Math.max(_dir.y, upBias);
-      if (_dir.lengthSq() < 1e-6) _dir.set(0, 1, 0);
-      _dir.normalize();
-      dashVec.copy(_dir).multiplyScalar(power);
+      /* camYaw/camPitch 가 한 번이라도 NaN 이면 vel → pos → 카메라 → 도시 전체가
+         NaN 이 된다. 입력·결과 양쪽을 유한값으로 강제한다. */
+      const yaw = fin(player.camYaw, 0);
+      const pitch = fin(player.camPitch, 0);
+      const p = fin(power, 0);
+      const cp = Math.cos(pitch);
+      _dir.set(Math.sin(yaw) * cp, Math.sin(pitch), Math.cos(yaw) * cp);
+      if (isNum(upBias)) _dir.y = Math.max(_dir.y, upBias);
+      /* 길이 0 벡터 normalize 방지 (r128 normalize 는 0 을 반환한다) */
+      const l2 = _dir.lengthSq();
+      if (!isNum(l2) || l2 < 1e-6) _dir.set(0, 1, 0);
+      else _dir.multiplyScalar(1 / Math.sqrt(l2));
+      dashVec.copy(_dir).multiplyScalar(p);
+      if (!vecFin(dashVec) || !vecFin(player.vel)) { dashVec.set(0, 0, 0); return; }
       player.vel.add(dashVec);
       if (player.grounded || player.state === 'ground') {
         player.grounded = false;
@@ -408,10 +453,14 @@
     let fxMax = 1;
 
     function startFx(kind, dur) {
-      fxKind = kind; fxT = dur; fxMax = dur;
+      /* fxMax 가 0 이면 update 에서 0/0 = NaN → scale/opacity 전파 */
+      fxMax = Math.max(0.05, fin(dur, 0.5));
+      fxT = fxMax;
+      fxKind = kind;
     }
 
     function beginBuff() {
+      endBuff();                 // 중첩 발동 시 이전 효과를 먼저 완전히 원복
       ctrl.active = true;
       ctrl.remain = def.dur > 0 ? def.dur : 1;
       ctrl.fxTint = def.tint || null;
@@ -440,6 +489,7 @@
     }
 
     function attachWings() {
+      detachWings();                         // 중첩 부착 방지 (idempotent)
       const rig = player.rig;
       if (!rig || !rig.j || !rig.j.chest) return;
       wingHost = rig.j.chest;
@@ -447,29 +497,42 @@
       wingHost.add(wings[1]);
     }
     function detachWings() {
-      if (!wingHost) return;
-      wingHost.remove(wings[0]);
-      wingHost.remove(wings[1]);
+      /* wingHost 가 이미 버려진 rig 의 뼈여도 remove 는 안전하다.
+         부모가 딴 데로 바뀐 경우까지 대비해 현재 부모에서도 뗀다. */
+      for (let i = 0; i < wings.length; i++) {
+        const w = wings[i];
+        if (w.parent) w.parent.remove(w);
+      }
       wingHost = null;
     }
 
-    /* 진행중 효과를 즉시 끝내고 전부 원복 */
+    /* 진행중 효과를 즉시 끝내고 전부 원복.
+       ★ 여기서 뭐가 터져도 mods 는 반드시 기본값으로 돌아가야 한다
+         (안 돌아가면 timeScale 0.4 / gravity 0.3 이 영구히 남는다) */
     function endBuff() {
-      if (ctrl.mods.invisible) fadeOff();
-      detachWings();
-      resetMods();
-      ctrl.active = false;
-      ctrl.remain = 0;
-      ctrl.fxTint = null;
-      aura.visible = false;
-      nanoGrp.visible = false;
-      for (let i = 0; i < tentacles.length; i++) tentacles[i].pivot.visible = false;
+      try {
+        fadeOff();          // mods.invisible 을 믿지 않는다 — 비어 있으면 no-op
+        detachWings();
+      } finally {
+        resetMods();
+        ctrl.active = false;
+        ctrl.remain = 0;
+        ctrl.fxTint = null;
+        aura.visible = false;
+        nanoGrp.visible = false;
+        for (let i = 0; i < tentacles.length; i++) tentacles[i].pivot.visible = false;
+      }
     }
 
     ctrl.trigger = function () {
       if (ctrl.active) return false;
-      if (ctrl.energy < 1) {
-        if (crime && crime.flash) crime.flash('포커스 부족 — ' + Math.round(ctrl.energy * 100) + '%', '#8899aa');
+      if (!vecFin(player.pos)) return false;         // NaN 상태에서는 아무것도 안 한다
+      syncSuit();                                    // 슈트가 바뀌었는데 통보 못 받았을 때
+      if (!(ctrl.energy >= 1)) {
+        if (crime && crime.flash) {
+          crime.flash('포커스 부족 — ' +
+            Math.round(Math.max(0, fin(ctrl.energy, 0)) * 100) + '%', '#8899aa');
+        }
         return false;
       }
       ctrl.energy = 0;
@@ -536,41 +599,58 @@
     };
 
     ctrl.setSuit = function (id) {
-      endBuff();
+      endBuff();                     // 진행중 버프·재질·웹윙 전부 원복하고 나서 교체
       fxT = 0; fxKind = '';
       blossom.visible = false;
       bolts.visible = false;
       for (let i = 0; i < rings.length; i++) rings[i].mesh.visible = false;
       for (let i = 0; i < ghosts.length; i++) ghosts[i].mesh.visible = false;
-      ctrl.suitId = id || 'classic';
+      ctrl.suitId = normId(id);
       applyDef();
     };
+
+    /* ★ game.js 는 player.setSuit() 만 부르고 abilities 에 통보하지 않을 수 있다.
+       그러면 player.rig 가 통째로 교체돼 웹윙·투명화가 옛 rig 에 남는다.
+       매 프레임 player.suitId 와 대조해 스스로 원복한다. */
+    function syncSuit() {
+      const pid = normId(player.suitId);
+      if (pid !== ctrl.suitId) ctrl.setSuit(pid);
+    }
 
     let extFocus = false;      // game.js 가 addFocus 를 직접 부르는지
     ctrl.addFocus = function (amount) {
       extFocus = true;
-      ctrl.energy = Math.max(0, Math.min(1, ctrl.energy + (amount || 0)));
+      ctrl.energy = Math.max(0, Math.min(1, fin(ctrl.energy, 0) + fin(amount, 0)));
     };
 
     /* ------------------------------------------------------- 매 프레임 */
     /* dt 는 timeScale 이 곱해져 들어올 수 있으므로 지속시간·게이지는 실제
        경과시간으로 계산한다 (배틀 포커스가 스스로 늘어나는 걸 방지) */
     let lastNow = 0;
-    let prevArrests = (crime && crime.arrests) || 0;
+    let clock = 0;             // time 인자가 없을 때 쓰는 자체 시계
+    let prevArrests = fin(crime && crime.arrests, 0);
 
     ctrl.update = function (dt, time) {
       const now = (typeof performance !== 'undefined' ? performance.now() : Date.now()) * 0.001;
-      let rdt = lastNow ? now - lastNow : dt;
+      let rdt = lastNow ? now - lastNow : fin(dt, 0);
       lastNow = now;
       if (!(rdt > 0)) rdt = 0;
       if (rdt > 0.1) rdt = 0.1;
+      /* time 이 undefined/NaN 이면 sin/cos 가 전부 NaN → scale·position 오염 */
+      clock += rdt;
+      const t = isNum(time) ? time : clock;
+
+      /* 슈트 교체를 놓치지 않는다 (mods/재질/웹윙 원복 보장) */
+      syncSuit();
 
       /* 임펄스 노출은 1프레임만 */
       if (dashHold > 0) { dashHold--; if (dashHold <= 0) ctrl.mods.dashImpulse = null; }
 
+      if (!isNum(ctrl.energy)) ctrl.energy = 0;
+
       /* 체포 감지 → 게이지 보너스.
          game.js 가 addFocus 를 직접 부르면 중복 지급을 막으려고 자동감지는 꺼진다 */
-      if (crime && typeof crime.arrests === 'number') {
+      if (crime && isNum(crime.arrests)) {
         if (!extFocus && crime.arrests > prevArrests) {
           ctrl.energy = Math.min(1,
             ctrl.energy + ARREST_GAIN * (crime.arrests - prevArrests));
@@ -580,9 +660,9 @@
 
       /* 게이지 충전 */
       let g = CHARGE;
-      if (player.speedKmh >= FAST_KMH) g *= FAST_MUL;
+      if (fin(player.speedKmh, 0) >= FAST_KMH) g *= FAST_MUL;
       if (player.state === 'swing') g *= SWING_MUL;
-      ctrl.energy = Math.min(1, ctrl.energy + g * rdt);
+      ctrl.energy = Math.max(0, Math.min(1, ctrl.energy + g * rdt));
       ctrl.ready = ctrl.energy >= 1 && !ctrl.active;
 
       if (ctrl.fxPulse > 0) ctrl.fxPulse = Math.max(0, ctrl.fxPulse - rdt * 3.2);
@@ -596,46 +676,56 @@
         }
       }
 
-      /* 따라다니는 이펙트 위치 */
-      followFx.position.set(player.pos.x, player.pos.y, player.pos.z);
+      /* 따라다니는 이펙트 위치 (NaN 좌표는 그대로 두고 건너뛴다) */
+      if (vecFin(player.pos)) {
+        followFx.position.set(player.pos.x, player.pos.y, player.pos.z);
+      }
 
       /* 오라 */
       if (aura.visible) {
-        const k = 0.5 + 0.5 * Math.sin(time * 6);
+        const k = 0.5 + 0.5 * Math.sin(t * 6);
         auraMat.opacity = (ctrl.suitId === 'noir' ? 0.1 : 0.16) * (0.6 + k * 0.4);
         const s = 1 + k * 0.06;
         aura.scale.set(s, s, s);
       }
 
       /* 촉수 */
-      if (tentacles[0].pivot.visible) {
+      if (tentacles.length && tentacles[0].pivot.visible) {
         for (let i = 0; i < tentacles.length; i++) {
-          const t = tentacles[i];
-          const w = Math.sin(time * 5 + t.phase);
-          const w2 = Math.cos(time * 3.7 + t.phase);
-          t.pivot.rotation.x = Math.cos(t.ang) * 0.5 + w * 0.28;
-          t.pivot.rotation.z = -Math.sin(t.ang) * 0.5 + w2 * 0.28;
-          t.pivot.rotation.y = w2 * 0.2;
+          const tn = tentacles[i];
+          const w = Math.sin(t * 5 + tn.phase);
+          const w2 = Math.cos(t * 3.7 + tn.phase);
+          tn.pivot.rotation.x = Math.cos(tn.ang) * 0.5 + w * 0.28;
+          tn.pivot.rotation.z = -Math.sin(tn.ang) * 0.5 + w2 * 0.28;
+          tn.pivot.rotation.y = w2 * 0.2;
         }
       }
 
       /* 나노 파편 궤도 */
       if (nanoGrp.visible) {
-        nanoGrp.rotation.y = time * 2.4;
+        nanoGrp.rotation.y = t * 2.4;
         for (let i = 0; i < shards.length; i++) {
           const s = shards[i];
           const rad = s.ring ? 1.15 : 0.8;
-          const y = 1.0 + Math.sin(time * 3 + s.phase) * (s.ring ? 0.55 : 0.3);
-          s.mesh.position.set(Math.cos(s.a + time * (s.ring ? 1.1 : -1.6)) * rad, y,
-            Math.sin(s.a + time * (s.ring ? 1.1 : -1.6)) * rad);
-          s.mesh.rotation.x = time * 3 + s.phase;
-          s.mesh.rotation.y = time * 2.2;
+          const y = 1.0 + Math.sin(t * 3 + s.phase) * (s.ring ? 0.55 : 0.3);
+          s.mesh.position.set(Math.cos(s.a + t * (s.ring ? 1.1 : -1.6)) * rad, y,
+            Math.sin(s.a + t * (s.ring ? 1.1 : -1.6)) * rad);
+          s.mesh.rotation.x = t * 3 + s.phase;
+          s.mesh.rotation.y = t * 2.2;
         }
       }
 
-      /* 웹윙 펄럭임 */
+      /* 웹윙 펄럭임 — rig 가 통째로 갈렸으면 새 chest 로 다시 붙인다 */
+      if (ctrl.mods.glide) {
+        const rig = player.rig;
+        const chest = rig && rig.j && rig.j.chest;
+        if (chest && chest !== wingHost) attachWings();
+        else if (!chest && wingHost) detachWings();
+      } else if (wingHost) {
+        detachWings();                   // glide 가 아닌데 붙어 있으면 잘못된 상태
+      }
       if (wingHost) {
-        const f = Math.sin(time * 7) * 0.12;
+        const f = Math.sin(t * 7) * 0.12;
         wings[0].rotation.z = -0.1 + f;
         wings[1].rotation.z = 0.1 - f;
         wingMat.opacity = 0.3 + Math.abs(f);
@@ -684,10 +774,23 @@
     };
 
     ctrl.dispose = function () {
-      endBuff();
+      endBuff();                       // 재질/웹윙 원복이 먼저
       scene.remove(followFx);
       scene.remove(worldFx);
       for (let i = 0; i < ghosts.length; i++) scene.remove(ghosts[i].mesh);
+      /* GPU 리소스 해제 — create() 를 다시 부르면 누수된다 */
+      const geos = [blossom.geometry, ringGeo, boltGeo, ghostGeo, tentGeo,
+        shardGeo, aura.geometry, wings[0].geometry, wings[1].geometry];
+      for (let i = 0; i < geos.length; i++) {
+        if (geos[i] && geos[i].dispose) geos[i].dispose();
+      }
+      const mats = [blossomMat, boltMat, tentMat, shardMat, auraMat, wingMat];
+      for (let i = 0; i < rings.length; i++) mats.push(rings[i].mat);
+      for (let i = 0; i < ghosts.length; i++) mats.push(ghosts[i].mat);
+      for (let i = 0; i < mats.length; i++) {
+        if (mats[i] && mats[i].dispose) mats[i].dispose();
+      }
+      if (wingTex && wingTex.dispose) wingTex.dispose();
     };
 
     return ctrl;

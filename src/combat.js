@@ -77,7 +77,7 @@
   }
 
   /* 모듈 스코프 재사용 벡터 (매 프레임 new 금지) */
-  const _v = new V3(), _v2 = new V3(), _fwd = new V3(), _side = new V3(),
+  const _v = new V3(), _fwd = new V3(),
     _from = new V3(), _to = new V3(), _look = new V3(), _tmp = new V3();
   const _hit = { x: 0, y: 0, z: 0, nx: 0, ny: 0, nz: 0, dist: 0, box: null };
   const _idx = [];
@@ -86,6 +86,13 @@
     return ((typeof performance !== 'undefined' && performance.now)
       ? performance.now() : Date.now()) * 0.001;
   }
+
+  /* NaN/Infinity 방어. 한 번이라도 NaN 이 좌표에 들어가면 행렬 → 그림자 카메라 →
+     바운딩까지 전부 오염되어 도시가 통째로 사라진다. 쓰기 직전에 반드시 거른다. */
+  function fin(v, d) {
+    return (typeof v === 'number' && v > -Infinity && v < Infinity) ? v : (d || 0);
+  }
+  function ok(v) { return typeof v === 'number' && v > -Infinity && v < Infinity; }
 
   /* ============================================================ 생성 */
   function create(scene, player, crime) {
@@ -148,6 +155,7 @@
       juggling: 0
     };
 
+    let disposed = false;         // dispose 뒤 호출돼도 죽지 않게
     let freezeT = 0;              // 히트스톱 남은 실시간
     let lastReal = nowSec();
     let clockT = 0;
@@ -180,6 +188,23 @@
       if (e && e.__ownT && e.__baseSpeed != null) e.T.speed = e.__baseSpeed;
     }
 
+    /* 이 모듈이 적에게 남긴 임시 변경을 전부 되돌린다.
+       체포 / 현장 종료(splice) / dispose / 능력 중첩 — 어떤 경로로 빠져나가도
+       반드시 여기를 통과하게 해서 speed 0 이나 비틀린 허리가 남지 않게 한다. */
+    function clearFx(e) {
+      if (!e) return;
+      restoreType(e);
+      e.__stun = 0;
+      e.__jg = false;
+      e.__jv = 0;
+      e.__kx = 0;
+      e.__kz = 0;
+      if (e.pos) e.pos.y = 0;
+      // crime 은 hips.rotation.x 만 쓴다. z 는 우리가 넣은 값이라 우리가 지워야 한다.
+      const j = e.model && e.model.j;
+      if (j && j.hips) j.hips.rotation.z = 0;
+    }
+
     function track(e) {
       if (active.indexOf(e) < 0) active.push(e);
     }
@@ -210,6 +235,7 @@
     }
 
     function impact(x, y, z, big) {
+      if (!ok(x) || !ok(y) || !ok(z)) return;   // NaN 좌표를 씬에 넣지 않는다
       const it = rings[ringCur % rings.length]; ringCur++;
       it.mesh.visible = true;
       it.mesh.position.set(x, y, z);
@@ -226,6 +252,7 @@
     }
 
     function ghost(x, y, z, s) {
+      if (!ok(x) || !ok(y) || !ok(z)) return;
       const it = puffs[puffCur % puffs.length]; puffCur++;
       it.sp.visible = true;
       it.sp.position.set(x, y, z);
@@ -276,7 +303,7 @@
     function juggle(e, up, bonus) {
       ownType(e);
       e.__jg = true;
-      e.__jv = up;
+      e.__jv = fin(up, 0);
       if (bonus && !e.__airBonus) {
         e.__airBonus = true;
         // 공중에 뜬 적은 웹 한 발이면 포박된다 (진행도를 필요발수-1 까지 채운다)
@@ -294,7 +321,7 @@
 
     /* ---------------- 펀치 ---------------- */
     c.punch = function () {
-      if (c.punchCool > 0) return false;
+      if (disposed || c.punchCool > 0) return false;
       c.punchCool = CFG.PUNCH_COOL;
       punchAnimT = 0.2;
 
@@ -315,14 +342,17 @@
       const heavy = (c.comboCount % 3 === 0);
       const aerial = !player.grounded && player.state !== 'ground';
 
-      // 방향 (플레이어 → 적)
+      // 방향 (플레이어 → 적) — 0 길이면 정면으로 밀어낸다
       let dx = e.pos.x - player.pos.x, dz = e.pos.z - player.pos.z;
-      const d = Math.hypot(dx, dz) || 1;
-      dx /= d; dz /= d;
+      const d = Math.hypot(dx, dz);
+      if (d > 1e-4 && ok(d)) { dx /= d; dz /= d; }
+      else { dx = _fwd.x; dz = _fwd.z; }        // _fwd 는 findTarget 에서 이미 채워졌다
+      if (!ok(dx) || !ok(dz)) { dx = 0; dz = 1; }
 
       ownType(e);
-      e.__kx = (e.__kx || 0) + dx * (heavy ? CFG.KB_HEAVY : CFG.KB) * mul;
-      e.__kz = (e.__kz || 0) + dz * (heavy ? CFG.KB_HEAVY : CFG.KB) * mul;
+      const kb = (heavy ? CFG.KB_HEAVY : CFG.KB) * mul;
+      e.__kx = fin(fin(e.__kx) + dx * kb);
+      e.__kz = fin(fin(e.__kz) + dz * kb);
 
       if (aerial) {
         // 공중 저글링: 처음이면 크게, 이어치면 조금 더 띄운다
@@ -346,7 +376,7 @@
 
     /* ---------------- 웹 야크 ---------------- */
     c.webYank = function () {
-      if (yankT > 0) return false;
+      if (disposed || yankT > 0) return false;
       const e = crime.aimTarget ? crime.aimTarget(CFG.YANK_RANGE) : null;
       if (!valid(e)) return false;
       yankTarget = e;
@@ -364,7 +394,7 @@
 
     /* ---------------- 회피 (스파이더 센스) ---------------- */
     c.dodge = function () {
-      if (c.dodgeCool > 0) return false;
+      if (disposed || c.dodgeCool > 0) return false;
       const perfect = c.canDodge;
       c.dodgeCool = CFG.DODGE_COOL;
       c.invuln = Math.max(c.invuln, CFG.DODGE_TIME);
@@ -384,22 +414,35 @@
       } else {
         dx = -_fwd.x; dz = -_fwd.z;
       }
-      const dl = Math.hypot(dx, dz) || 1;
-      dx /= dl; dz /= dl;
-
-      // 벽에 박히지 않게 거리 제한
-      let dist = CFG.DODGE_DIST;
-      if (city && NS.City.raycast(city, player.pos.x, player.pos.y + 1.1, player.pos.z,
-        dx, 0, dz, dist + 0.8, _hit)) {
-        dist = Math.max(0, _hit.dist - 0.8);
-      }
+      const dl = Math.hypot(dx, dz);
+      if (dl > 1e-4 && ok(dl)) { dx /= dl; dz /= dl; }
+      else { dx = -fin(_fwd.x); dz = -fin(_fwd.z, 1); }
+      if (!ok(dx) || !ok(dz) || (dx === 0 && dz === 0)) { dx = 0; dz = -1; }
 
       const ox = player.pos.x, oy = player.pos.y, oz = player.pos.z;
-      player.pos.x = Math.max(-HALF, Math.min(HALF, ox + dx * dist));
-      player.pos.z = Math.max(-HALF, Math.min(HALF, oz + dz * dist));
-      player.vel.x += dx * 4.5;
-      player.vel.z += dz * 4.5;
-      if (player.rig) player.rig.root.position.copy(player.pos);
+
+      // 벽에 박히지 않게 거리 제한. 시작점이 이미 NaN 이면 이동 자체를 포기한다.
+      let dist = CFG.DODGE_DIST;
+      if (!ok(ox) || !ok(oy) || !ok(oz)) dist = 0;
+      else if (city && NS.City.raycast(city, ox, oy + 1.1, oz,
+        dx, 0, dz, dist + 0.8, _hit)) {
+        dist = Math.max(0, Math.min(dist, fin(_hit.dist, dist + 0.8) - 0.8));
+      }
+
+      // 스윙 중에는 순간이동 금지 — 줄 길이가 고정이라 로프가 튄다. 속도만 준다.
+      if (player.state === 'swing' || (player.web && player.web.on)) dist = 0;
+
+      if (dist > 0) {
+        const nx = ox + dx * dist, nz = oz + dz * dist;
+        if (ok(nx) && ok(nz)) {
+          player.pos.x = Math.max(-HALF, Math.min(HALF, nx));
+          player.pos.z = Math.max(-HALF, Math.min(HALF, nz));
+        }
+      }
+      player.vel.x = fin(player.vel.x) + dx * (dist > 0 ? 4.5 : 9);
+      player.vel.z = fin(player.vel.z) + dz * (dist > 0 ? 4.5 : 9);
+      // player.rig 는 슈트 교체 때 통째로 갈린다 — 매번 새로 읽는다
+      if (player.rig && player.rig.root) player.rig.root.position.copy(player.pos);
 
       // 잔상
       for (let i = 0; i < 3; i++) {
@@ -454,7 +497,7 @@
           danger = d < 4.4 && cool < 0.45 && Math.abs(dy) < 2.6;
         }
         if (!danger) continue;
-        if (shown < marks.length) {
+        if (shown < marks.length && ok(e.pos.x) && ok(e.pos.y) && ok(e.pos.z)) {
           const s = marks[shown++];
           s.visible = true;
           s.position.set(e.pos.x, e.pos.y + 2.15, e.pos.z);
@@ -472,16 +515,26 @@
       for (let i = active.length - 1; i >= 0; i--) {
         const e = active[i];
         if (!valid(e)) {
-          // 체포/현장 종료로 사라진 적 — 원복만 하고 목록에서 뺀다
-          restoreType(e);
-          if (e) { e.__stun = 0; e.__jg = false; e.__kx = 0; e.__kz = 0; }
+          // 체포 / 현장 종료(crime.enemies 에서 splice) — 원복을 끝까지 하고 뺀다
+          clearFx(e);
           active.splice(i, 1);
           continue;
+        }
+
+        // 좌표가 한 번이라도 오염되면 모델 행렬 → 그림자 → 씬 전체로 번진다.
+        // 여기서 잡아서 마지막 정상 위치로 되돌린다.
+        if (!ok(e.pos.x) || !ok(e.pos.y) || !ok(e.pos.z)) {
+          const r = e.model && e.model.root;
+          const rx = r && ok(r.position.x) ? r.position.x : 0;
+          const rz = r && ok(r.position.z) ? r.position.z : 0;
+          e.pos.set(rx, 0, rz);
+          e.__kx = 0; e.__kz = 0; e.__jg = false; e.__jv = 0;
         }
 
         // 스턴: crime 이 매 프레임 상태를 덮어쓰므로 speed 를 0 으로 눌러 둔다
         if (e.__stun > 0) {
           e.__stun -= dt;
+          ownType(e);                 // e.T 는 TYPES 공유 객체다. 복제 없이 0 을 쓰면 전원이 굳는다
           e.T.speed = 0;
           e.atkCool = Math.max(e.atkCool || 0, 0.25);
           const j = e.model && e.model.j;
@@ -498,10 +551,11 @@
 
         // 저글링: y 를 직접 다룬다 (crime 은 e.pos.y 를 그대로 모델에 반영한다)
         if (e.__jg) {
+          ownType(e);                 // speed 를 건드리기 전 반드시 전용 T 확보
           e.T.speed = 0;
-          e.__jv -= CFG.GRAV * CFG.JG_GRAV * dt;
-          e.pos.y += e.__jv * dt;
-          if (e.pos.y <= 0) {
+          e.__jv = fin(e.__jv) - CFG.GRAV * CFG.JG_GRAV * dt;
+          e.pos.y = fin(e.pos.y) + e.__jv * dt;
+          if (!(e.pos.y > 0)) {       // NaN 도 이쪽으로 떨어진다
             e.pos.y = 0;
             e.__jg = false;
             e.__jv = 0;
@@ -513,24 +567,28 @@
 
         // 넉백
         if (e.__kx || e.__kz) {
-          const nx = e.pos.x + e.__kx * dt;
-          const nz = e.pos.z + e.__kz * dt;
-          if (!blocked(nx, nz)) {
-            e.pos.x = Math.max(-HALF, Math.min(HALF, nx));
-            e.pos.z = Math.max(-HALF, Math.min(HALF, nz));
-          } else {
-            // 벽에 처박음 — 살짝 추가 스턴
+          if (!ok(e.__kx) || !ok(e.__kz)) {
             e.__kx = 0; e.__kz = 0;
-            stun(e, 0.5);
-            impact(e.pos.x, e.pos.y + 1.0, e.pos.z, false);
+          } else {
+            const nx = e.pos.x + e.__kx * dt;
+            const nz = e.pos.z + e.__kz * dt;
+            if (!blocked(nx, nz)) {
+              e.pos.x = Math.max(-HALF, Math.min(HALF, nx));
+              e.pos.z = Math.max(-HALF, Math.min(HALF, nz));
+            } else {
+              // 벽에 처박음 — 살짝 추가 스턴
+              e.__kx = 0; e.__kz = 0;
+              stun(e, 0.5);
+              impact(e.pos.x, e.pos.y + 1.0, e.pos.z, false);
+            }
+            const damp = Math.exp(-7 * dt);
+            e.__kx *= damp; e.__kz *= damp;
+            if (Math.abs(e.__kx) < 0.06 && Math.abs(e.__kz) < 0.06) { e.__kx = 0; e.__kz = 0; }
           }
-          const damp = Math.exp(-7 * dt);
-          e.__kx *= damp; e.__kz *= damp;
-          if (Math.abs(e.__kx) < 0.06 && Math.abs(e.__kz) < 0.06) { e.__kx = 0; e.__kz = 0; }
         }
 
         // 위치를 모델에 즉시 반영 (crime.update 뒤에 불리므로 이게 최종값)
-        if (e.model && e.model.root) {
+        if (e.model && e.model.root && ok(e.pos.x) && ok(e.pos.y) && ok(e.pos.z)) {
           e.model.root.position.set(e.pos.x, e.pos.y, e.pos.z);
         }
 
@@ -538,6 +596,12 @@
         const busy = (e.__stun > 0) || e.__jg || !!e.__kx || !!e.__kz;
         if (!busy) {
           restoreType(e);
+          // 목록을 빠져나가는 모든 경로에서 우리가 남긴 흔적을 지운다.
+          // crime 은 e.pos.y 를 그대로 쓰므로 여기서 안 내리면 적이 공중에 굳는다.
+          if (e.pos && e.pos.y !== 0) e.pos.y = 0;
+          const jj = e.model && e.model.j;
+          if (jj && jj.hips) jj.hips.rotation.z = 0;
+          if (e.model && e.model.root) e.model.root.position.set(e.pos.x, 0, e.pos.z);
           active.splice(i, 1);
         }
       }
@@ -547,6 +611,7 @@
 
     /* ---------------- 매 프레임 ---------------- */
     c.update = function (dt, time) {
+      if (disposed || !crime || !crime.enemies) { c.hitStop = 1; return; }
       // 실시간 (히트스톱으로 dt 가 0 이 되어도 스스로 풀리게)
       const n = nowSec();
       let rt = n - lastReal;
@@ -599,18 +664,24 @@
           yankT -= dt;
           const e = yankTarget;
           _fwd.set(Math.sin(player.camYaw), 0, Math.cos(player.camYaw));
-          const tx = player.pos.x + _fwd.x * CFG.YANK_HOLD;
-          const tz = player.pos.z + _fwd.z * CFG.YANK_HOLD;
+          const tx = fin(player.pos.x + _fwd.x * CFG.YANK_HOLD, e.pos.x);
+          const tz = fin(player.pos.z + _fwd.z * CFG.YANK_HOLD, e.pos.z);
+          const ty = fin(player.grounded ? 0 : Math.max(0, player.pos.y - 1.2), 0);
           const k = 1 - Math.exp(-11 * dt);
-          e.pos.x += (tx - e.pos.x) * k;
-          e.pos.z += (tz - e.pos.z) * k;
-          e.pos.y += ((player.grounded ? 0 : Math.max(0, player.pos.y - 1.2)) - e.pos.y) * k;
+          e.pos.x = fin(e.pos.x + (tx - e.pos.x) * k, e.pos.x);
+          e.pos.z = fin(e.pos.z + (tz - e.pos.z) * k, e.pos.z);
+          e.pos.y = fin(e.pos.y + (ty - e.pos.y) * k, 0);
           e.__kx = 0; e.__kz = 0;
-          if (!player.grounded && e.pos.y > 0.4) { e.__jg = true; e.__jv = 0.5; track(e); }
-          if (e.model && e.model.root) e.model.root.position.set(e.pos.x, e.pos.y, e.pos.z);
+          // ownType 없이 __jg 를 켜면 updateEnemies 가 공유 TYPES.speed 를 0 으로 만든다
+          if (!player.grounded && e.pos.y > 0.4) { ownType(e); e.__jg = true; e.__jv = 0.5; track(e); }
+          if (e.model && e.model.root && ok(e.pos.x) && ok(e.pos.y) && ok(e.pos.z)) {
+            e.model.root.position.set(e.pos.x, e.pos.y, e.pos.z);
+          }
 
-          if (player.rig) NS.Character.handWorld(player.rig, 'R', _from);
-          else _from.copy(player.pos);
+          // 슈트 교체 시 player.rig 가 통째로 갈리므로 캐시하지 않고 매번 읽는다
+          if (player.rig && player.rig.j && player.rig.j.handR) {
+            NS.Character.handWorld(player.rig, 'R', _from);
+          } else _from.copy(player.pos);
           _to.set(e.pos.x, e.pos.y + 1.0, e.pos.z);
           yankStrand.update(_from, _to, 1, time, 1);
 
@@ -629,11 +700,16 @@
       senseScan();
 
       // 펀치 팔 조준 (player.update 뒤에 불리므로 이번 프레임 포즈를 덮어쓴다)
-      if (punchAnimT > 0 && valid(punchTarget) && player.rig) {
+      // punchTarget 은 splice 로 사라질 수 있다 — 유효하지 않으면 즉시 참조를 끊는다
+      if (!valid(punchTarget) || punchAnimT <= 0) {
+        punchTarget = null;
+      } else if (player.rig && player.rig.root) {
         _v.set(punchTarget.pos.x, punchTarget.pos.y + 1.15, punchTarget.pos.z);
-        NS.Character.aimArm(player.rig, punchSide, _v, -0.1);
-        player.rig.root.updateMatrixWorld(true);
-      } else if (punchAnimT <= 0) punchTarget = null;
+        if (ok(_v.x) && ok(_v.y) && ok(_v.z)) {
+          NS.Character.aimArm(player.rig, punchSide, _v, -0.1);
+          player.rig.root.updateMatrixWorld(true);
+        }
+      }
 
       // 이펙트 갱신
       for (let i = 0; i < rings.length; i++) {
@@ -656,13 +732,28 @@
 
     /* ---------------- 정리 ---------------- */
     c.dispose = function () {
-      for (let i = active.length - 1; i >= 0; i--) {
-        const e = active[i];
-        restoreType(e);
-        if (e) { e.__stun = 0; e.__jg = false; e.__kx = 0; e.__kz = 0; }
-      }
+      if (disposed) return;
+      disposed = true;
+
+      // 적에게 남긴 변경(speed 0, 저글링 y, 비틀린 허리)을 전부 원복
+      for (let i = active.length - 1; i >= 0; i--) clearFx(active[i]);
       active.length = 0;
+
+      // 스턴 중이라 active 밖에 있을 수 있는 참조까지 정리
+      clearFx(punchTarget); clearFx(yankTarget);
+      punchTarget = null; yankTarget = null; dangerEnemy = null;
+
+      // 히트스톱이 걸린 채 dispose 되면 game.js 의 dt *= hitStop 이 영원히 0.06 이 된다
+      yankT = 0; freezeT = 0; punchAnimT = 0;
+      c.hitStop = 1; c.shake = 0; c.invuln = 0;
+      c.canDodge = false; c.juggling = 0; c.comboCount = 0; c.comboTimer = 0;
+
       yankStrand.hide();
+      if (yankStrand.mesh) {                     // createStrand 가 씬에 붙인 메시 — 우리가 뗀다
+        scene.remove(yankStrand.mesh);
+        if (yankStrand.mesh.geometry) yankStrand.mesh.geometry.dispose();
+        if (yankStrand.mesh.material) yankStrand.mesh.material.dispose();
+      }
       rings.forEach(it => { scene.remove(it.mesh); it.mesh.material.dispose(); });
       ringGeo.dispose();
       puffs.forEach(it => { scene.remove(it.sp); it.sp.material.dispose(); });

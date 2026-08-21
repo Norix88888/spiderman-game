@@ -72,7 +72,14 @@
       footL: S(W.footL.x, 0.05, -0.02, W.footL.x, 0.028, 0.17),
       hipR: L('hipR', 'kneeR'),
       kneeR: L('kneeR', 'footR'),
-      footR: S(W.footR.x, 0.05, -0.02, W.footR.x, 0.028, 0.17)
+      footR: S(W.footR.x, 0.05, -0.02, W.footR.x, 0.028, 0.17),
+      /* 몸통 쪽에서만 쓰는 "관절부 한정" 선분.
+         차렷 자세에서는 위팔 본이 갈비뼈 바로 옆을 지나기 때문에,
+         전체 선분을 쓰면 허리가 팔을 따라가 버린다(찢어짐). */
+      shoulderLJ: S(0.20, 1.37, 0, 0.20, 1.44, 0),
+      shoulderRJ: S(-0.20, 1.37, 0, -0.20, 1.44, 0),
+      hipLJ: S(0.105, 0.86, 0, 0.105, 0.93, 0),
+      hipRJ: S(-0.105, 0.86, 0, -0.105, 0.93, 0)
     };
   }
   var SEG = boneSegments();
@@ -246,10 +253,10 @@
     [0.570, 0.072, 0.074, 0.104, 2.1],
     [0.640, 0.080, 0.081, 0.105, 2.1],
     [0.720, 0.088, 0.088, 0.105, 2.1],
-    [0.800, 0.094, 0.093, 0.105, 2.1],
-    [0.870, 0.098, 0.097, 0.105, 2.2],  // 허벅지 상단
-    [0.930, 0.093, 0.095, 0.106, 2.2],
-    [0.985, 0.076, 0.084, 0.108, 2.2]   // 골반 안쪽에 묻힘
+    [0.800, 0.094, 0.093, 0.107, 2.1],
+    [0.870, 0.096, 0.097, 0.111, 2.2],  // 허벅지 상단
+    [0.930, 0.091, 0.094, 0.113, 2.2],  // 대전자(엉덩이 옆) 돌출
+    [0.985, 0.062, 0.072, 0.109, 2.2]   // 골반 안쪽에 완전히 묻힘
   ];
 
   /* 발(신발): 앞(발가락) → 뒤(뒤꿈치) 로 z 내림차순. [z, rx, ry, cy, n] */
@@ -328,7 +335,11 @@
   function buildTorso(B) {
     var sec = B.section({
       hips: 1, spine: 1, chest: 1, neck: 1, head: 1,
-      shoulderL: 0.45, shoulderR: 0.45, hipL: 0.35, hipR: 0.35
+      /* 어깨는 쇄골 높이(1.30→1.41)에서만, 골반은 장골 아래(1.02→0.90)에서만 섞는다 */
+      shoulderL: { m: 0.85, s: 'shoulderLJ', y0: 1.18, y1: 1.44 },
+      shoulderR: { m: 0.85, s: 'shoulderRJ', y0: 1.18, y1: 1.44 },
+      hipL: { m: 0.85, s: 'hipLJ', y0: 1.00, y1: 0.90 },
+      hipR: { m: 0.85, s: 'hipRJ', y0: 1.00, y1: 0.90 }
     });
     var st = stackY(B, sec, TORSO, 1, torsoMat, true);
     var last = TORSO.length - 1;
@@ -402,12 +413,23 @@
     var cand = [];
     for (i = 0; i < count; i++) {
       var px = B.pos[i * 3], py = B.pos[i * 3 + 1], pz = B.pos[i * 3 + 2];
-      var allow = B.sections[B.sec[i]].allow, name, d, w;
+      var allow = B.sections[B.sec[i]].allow, name, d, w, a, m, t;
       cand.length = 0;
       for (name in allow) {
         if (!allow.hasOwnProperty(name)) continue;
-        d = distSeg(px, py, pz, SEG[name]);
-        w = allow[name] / Math.pow(d + EPS, POW);
+        a = allow[name];
+        if (typeof a === 'number') { m = a; d = distSeg(px, py, pz, SEG[name]); }
+        else {
+          m = a.m;
+          d = distSeg(px, py, pz, SEG[a.s || name]);
+          if (a.y1 !== undefined) {           // 높이에 따른 영향 페이드(리그 페인팅)
+            t = (py - a.y0) / (a.y1 - a.y0);
+            t = t < 0 ? 0 : (t > 1 ? 1 : t);
+            m *= t * t * (3 - 2 * t);         // smoothstep
+          }
+        }
+        if (m <= 0) continue;
+        w = m / Math.pow(d + EPS, POW);
         cand.push({ i: bi[name], w: w });
       }
       cand.sort(function (a, b) { return b.w - a.w; });

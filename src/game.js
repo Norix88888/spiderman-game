@@ -16,7 +16,9 @@
     suitGrid: $('suitGrid'), pause: $('pause'),
     objective: $('objective'), oName: $('oName'), oDist: $('oDist'),
     oLeft: $('oLeft'), oArrow: $('oArrow'),
-    hpFill: $('hpFill'), hurt: $('hurt')
+    hpFill: $('hpFill'), hurt: $('hurt'),
+    fcFill: $('fcFill'), abName: $('abName'),
+    senseWrap: $('senseWrap'), comboBig: $('comboBig')
   };
 
   /* 터치 기기 판별 — 마우스가 없는(coarse pointer) 기기면 터치 UI */
@@ -29,7 +31,7 @@
   const MOBILE = IS_TOUCH && IS_SMALL;
 
   let renderer, scene, camera, composer, bloomPass, fxaaPass;
-  let city, player, crime, mapCtx, mapImg;
+  let city, player, crime, combat, abilities, fx, mapCtx, mapImg;
   let running = false, started = false, paused = false;
   let score = 0, combo = 1, comboTimer = 0, quality = 2;
   const clock = { last: 0 };
@@ -224,6 +226,10 @@
     btn('bJump', () => { input.jump = true; touch.jumpHeld = true; },
       () => { touch.jumpHeld = false; });
     btn('bDive', () => { touch.dive = true; }, () => { touch.dive = false; });
+    btn('bPunch', doPunch);
+    btn('bYank', doYank);
+    btn('bDodge', doDodge);
+    btn('bPower', doAbility);
     btn('bSuit', () => { togglePicker(); });
     btn('bPause', () => { setPaused(!paused); });
     btn('bMute', () => {
@@ -249,6 +255,10 @@
       if (e.code === 'KeyR') player && player.respawn();
       if (e.code === 'KeyG') cycleQuality();
       if (e.code === 'KeyM') toast(sfx.toggleMute() ? '🔇 소리 끔' : '🔊 소리 켬');
+      if (e.code === 'KeyF') doPunch();
+      if (e.code === 'KeyE') doYank();
+      if (e.code === 'KeyQ') doAbility();
+      if (e.code === 'KeyC') doDodge();
       if (e.code === 'KeyP' || e.code === 'Escape') {
         if (el.picker.classList.contains('on')) togglePicker();
         else setPaused(!paused);
@@ -282,6 +292,16 @@
     // 창을 벗어났을 때만 일시정지 (포인터 잠금 해제로는 멈추지 않는다)
     window.addEventListener('blur', () => { if (started) setPaused(true); });
     window.addEventListener('resize', onResize);
+  }
+
+  /* ------------------------------------------------- 전투 / 능력 액션 */
+  function doPunch() { if (combat && started && !paused) combat.punch(); }
+  function doYank() { if (combat && started && !paused) combat.webYank(); }
+  function doDodge() { if (combat && started && !paused) combat.dodge(); }
+  function doAbility() {
+    if (!abilities || !started || paused) return;
+    if (abilities.trigger()) toast(abilities.name + ' 발동!', abilities.color);
+    else toast('포커스 부족 (' + Math.round(abilities.energy * 100) + '%)', '#8b93a8');
   }
 
   function pollKeys() {
@@ -339,7 +359,8 @@
     el.suitSwatch.style.backgroundImage = 'url(' + NS.Suits.swatch(s) + ')';
     el.suitSwatch.style.backgroundSize = 'cover';
     if (player) player.setSuit(s.id);
-    toast(s.name + ' 착용');
+    if (abilities) abilities.setSuit(s.id);
+    toast(s.name + ' — ' + (abilities ? abilities.name : s.desc), s.accent);
   }
   function togglePicker() {
     if (!started) return;
@@ -400,6 +421,17 @@
   }
 
   function initPost() {
+    // 새 파이프라인(색보정·모션블러·색수차·비네트)이 있으면 그걸 쓴다
+    if (NS.PostFX) {
+      try {
+        fx = NS.PostFX.create(renderer, scene, camera, { mobile: MOBILE });
+        if (fx && fx.enabled) {
+          fx.setQuality(quality);
+          onResize();
+          return;
+        }
+      } catch (e) { console.warn('PostFX 실패, 기본 파이프라인으로', e); fx = null; }
+    }
     try {
       if (!THREE.EffectComposer) return;
       composer = new THREE.EffectComposer(renderer);
@@ -426,6 +458,7 @@
     const w = window.innerWidth, h = window.innerHeight;
     camera.aspect = w / h; camera.updateProjectionMatrix();
     renderer.setSize(w, h);
+    if (fx && fx.enabled) { fx.setSize(w, h); return; }
     if (composer) {
       composer.setSize(w, h);
       const pr = renderer.getPixelRatio();
@@ -549,6 +582,20 @@
     return got;
   }
 
+  /* ------------------------------------------------- 화면 효과 연동 */
+  function applyScreenFx(dt) {
+    if (!fx || !fx.enabled) return;
+    // 속도감 — 90km/h 부터 서서히, 240km/h 에서 최대
+    const sp = Math.max(0, Math.min(1, (player.speedKmh - 90) / 150));
+    fx.setSpeed(sp);
+    fx.setDamage(crime.hurtFlash || 0);
+    if (combat && combat.shake > 0.01) fx.setShake(combat.shake);
+    if (abilities) {
+      if (abilities.fxPulse > 0.6) fx.setPulse(1);
+      fx.setTint(abilities.fxTint || null, abilities.fxTint ? 0.35 : 0, 'ability');
+    }
+  }
+
   /* ------------------------------------------------------------ HUD */
   const _cv = new V3();
   let hudT = 0, crossT = 0;
@@ -580,9 +627,28 @@
       el.hpFill.style.width = (hp * 100) + '%';
       el.hpFill.classList.toggle('low', hp < 0.3);
 
-      // 콤보
+      // 콤보 (체포)
       el.combo.classList.toggle('on', crime.combo > 1);
       if (crime.combo > 1) el.combo.textContent = '×' + crime.combo + ' 연속 체포';
+
+      // 포커스 게이지 + 슈트 능력 이름
+      if (abilities) {
+        const e2 = Math.max(0, Math.min(1, abilities.energy));
+        el.fcFill.style.width = (e2 * 100) + '%';
+        el.fcFill.style.background = abilities.color;
+        el.fcFill.classList.toggle('full', e2 >= 1);
+        el.abName.textContent = abilities.active
+          ? abilities.name + ' ' + abilities.remain.toFixed(1) + 's'
+          : abilities.name;
+      }
+    }
+
+    // 전투 HUD (매 프레임 — 반응이 빨라야 함)
+    if (combat) {
+      el.senseWrap.classList.toggle('on', !!combat.canDodge && combat.invuln <= 0);
+      const cc = combat.comboCount;
+      el.comboBig.classList.toggle('on', cc > 1);
+      if (cc > 1) el.comboBig.textContent = cc + ' HIT';
     }
     el.hurt.style.opacity = crime.hurtFlash * 0.9;
     if (crime.messageT > 0 && crime.message !== lastMsg) {
@@ -616,10 +682,19 @@
       // 한 프레임에서 예외가 나도 게임 전체가 멈추지 않도록 방어
       try {
         pollKeys();
-        player.update(dt, input);
-        player.updateCamera(camera, dt);
-        city.update(dt, t, player.pos);
-        crime.update(dt, t);
+        // 히트스톱(타격 순간 정지) + 슬로모 능력을 시간 배수로 반영
+        let sdt = dt;
+        if (combat) sdt *= combat.hitStop;
+        if (abilities) sdt *= abilities.mods.timeScale;
+        if (sdt > 0.1) sdt = 0.1;
+
+        player.update(sdt, input);
+        if (abilities) abilities.update(sdt, t);       // player 이후 · 카메라 이전
+        player.updateCamera(camera, sdt);
+        city.update(sdt, t, player.pos);
+        crime.update(sdt, t);
+        if (combat) combat.update(sdt, t);             // crime 이후
+        applyScreenFx(dt);
         updateHUD(dt);
         drawMap();
       } catch (err) {
@@ -640,7 +715,8 @@
     }
 
     try {
-      if (composer && quality > 0) composer.render();
+      if (fx && fx.enabled) fx.render(dt);
+      else if (composer && quality > 0) composer.render();
       else renderer.render(scene, camera);
     } catch (err) {
       if (errCount++ < 3) console.error('[render]', err);
@@ -682,10 +758,19 @@
           player.pos.set(0, 190, 0);
           crime = NS.Crime.create(scene, city, player);
           player.onWebFire = function () { return crime.tryWebShot(); };
+          try {
+            combat = NS.Combat.create(scene, player, crime);
+          } catch (e) { console.warn('combat 비활성', e); combat = null; }
+          try {
+            abilities = NS.Abilities.create(scene, player, crime);
+            player.mods = abilities.mods;      // player.js 가 물리에 반영
+          } catch (e) { console.warn('abilities 비활성', e); abilities = null; }
           initMap();
           initPost();
           NS.dbg = { get player() { return player; }, get city() { return city; },
             get crime() { return crime; },
+            get combat() { return combat; }, get abilities() { return abilities; },
+            get fx() { return fx; },
             get renderer() { return renderer; }, get composer() { return composer; },
             get bloom() { return bloomPass; }, get camera() { return camera; },
             get scene() { return scene; }, input: input, keys: keys,

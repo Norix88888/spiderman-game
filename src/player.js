@@ -74,7 +74,8 @@
       speedKmh: 0,
       best: 0,
       lastAnchorMiss: 0,
-      suitId: suitId
+      suitId: suitId,
+      mods: null            // abilities.js 의 보정값 (game.js 가 연결)
     };
 
     p.targetQuat = new THREE.Quaternion();
@@ -321,9 +322,20 @@
           p.vel.set(0, 2, 0).addScaledVector(_b, 4);
         }
       } else {
+        // 슈트 능력 보정 (abilities.js 가 세팅한 값)
+        const M = p.mods;
+        const gMul = M ? M.gravityMul : 1;
+        const sMul = M ? M.speedMul : 1;
+
         // 중력
-        const g = p.state === 'swing' ? C.GRAV * 0.92 : C.GRAV;
+        let g = (p.state === 'swing' ? C.GRAV * 0.92 : C.GRAV) * gMul;
         p.vel.y -= g * dt;
+
+        // 활공(그웬): 낙하 속도를 붙잡고 전방으로 미끄러진다
+        if (M && M.glide && !p.grounded && p.state !== 'swing') {
+          if (p.vel.y < -9) p.vel.y += (-9 - p.vel.y) * Math.min(1, 6 * dt);
+          p.vel.addScaledVector(_f, 16 * dt);
+        }
 
         if (p.state === 'swing' && p.web.on) {
           p.web.t += dt;
@@ -348,7 +360,7 @@
             _t.copy(p.vel); _t.y = 0;
             if (_t.lengthSq() > 1) {
               _t.normalize();
-              p.vel.addScaledVector(_t, C.PUMP * dt);
+              p.vel.addScaledVector(_t, C.PUMP * sMul * dt);
             }
           }
           // ---- 포인트 런치: 스윙 중 점프. 호의 최저점에 가까울수록 크게 솟는다 ----
@@ -374,7 +386,7 @@
 
         if (p.grounded && p.state !== 'swing') {
           // 지상 마찰 + 최대속도
-          const maxS = input.sprint ? C.SPRINT : C.RUN;
+          const maxS = (input.sprint ? C.SPRINT : C.RUN) * sMul;
           _t.set(p.vel.x, 0, p.vel.z);
           const hs = _t.length();
           if (hs > maxS) { _t.multiplyScalar(maxS / hs); p.vel.x = _t.x; p.vel.z = _t.z; }
@@ -426,8 +438,9 @@
       }
 
       // 최대 속도
+      const cap = C.MAXSPD * (p.mods ? p.mods.speedMul : 1);
       const sp2 = p.vel.length();
-      if (sp2 > C.MAXSPD) p.vel.multiplyScalar(C.MAXSPD / sp2);
+      if (sp2 > cap) p.vel.multiplyScalar(cap / sp2);
 
       /* ---- 충돌 ---- */
       const col = collide(dt);
