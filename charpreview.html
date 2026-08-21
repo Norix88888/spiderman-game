@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>캐릭터 미리보기</title>
+<style>
+  html,body{margin:0;height:100%;background:#161922;overflow:hidden}
+  canvas{display:block}
+  #err{position:fixed;bottom:8px;left:8px;color:#ff8a94;font:12px sans-serif;white-space:pre-wrap}
+</style>
+</head>
+<body>
+<div id="err"></div>
+<script src="vendor/three.min.js"></script>
+<script src="src/suits.js"></script>
+<script src="src/body.js"></script>
+<script src="src/character.js"></script>
+<script>
+(function(){
+  const NS = window.SPIDER;
+  const err = document.getElementById('err');
+  const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  document.body.appendChild(renderer.domElement);
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x161922);
+  const camera = new THREE.PerspectiveCamera(35, innerWidth/innerHeight, 0.05, 60);
+
+  scene.add(new THREE.HemisphereLight(0xa8c0ff, 0x252a36, 0.85));
+  const key = new THREE.DirectionalLight(0xfff3e2, 1.9); key.position.set(2.5,4,4); scene.add(key);
+  const rim = new THREE.DirectionalLight(0x9fc0ff, 1.5); rim.position.set(-3.5,2,-3); scene.add(rim);
+  const fill = new THREE.DirectionalLight(0xffffff, 0.7); fill.position.set(-1.5,1,4); scene.add(fill);
+  scene.add(new THREE.GridHelper(10,10,0x2e3342,0x252a36));
+
+  let rigs = [];
+  window.__show = function(ids, spread){
+    rigs.forEach(function(r){ scene.remove(r.root); });
+    rigs = [];
+    ids.forEach(function(id, i){
+      try {
+        const r = NS.Character.build(id);
+        r.root.position.x = (i - (ids.length-1)/2) * (spread || 1.35);
+        scene.add(r.root);
+        rigs.push(r);
+      } catch(e){ err.textContent += id+': '+e.message+'\n'; }
+    });
+    return rigs.length;
+  };
+  window.__rest = function(){
+    rigs.forEach(function(r){ for (const k in r.j) r.j[k].rotation.set(0,0,0); });
+  };
+  window.__pose = function(fn){ rigs.forEach(function(r){ fn(r.j, r); }); };
+  window.__cam = function(x,y,z,tx,ty,tz){
+    camera.position.set(x,y,z); camera.lookAt(tx,ty,tz);
+  };
+  window.__draw = function(){
+    rigs.forEach(function(r){ r.root.updateMatrixWorld(true); });
+    renderer.render(scene, camera);
+  };
+  window.__size = function(w,h){
+    renderer.setSize(w,h,false);
+    camera.aspect = w/h; camera.updateProjectionMatrix();
+  };
+  window.__ready = true;
+  window.onerror = function(m){ err.textContent += m+'\n'; };
+})();
+</script>
+</body>
+</html>

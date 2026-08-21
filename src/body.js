@@ -531,5 +531,5 @@
     return { mesh: mesh, skeleton: skeleton, root: root, bones: map };
   }
 
-  NS.BodyGen1 = { build: build };
+  NS.BodyGen = { build: build };
 })();

@@ -41,25 +41,32 @@
     return o;
   }
 
-  /* 눈 렌즈: 평면 Shape 를 구면에 투영해서 얼굴에 밀착 */
-  function eyeMesh(mat, style, side, R) {
+  /* 눈 렌즈: 평면 Shape 를 구면에 투영해서 얼굴에 밀착.
+     원작 마스크 렌즈 = 코 쪽(안쪽)은 뾰족하게 모이고, 바깥으로 갈수록
+     크게 부풀어 위로 솟는 물방울꼴. x=0 이 안쪽 끝(코 쪽)이다. */
+  function eyeMesh(mat, style, side, R, grow) {
+    grow = grow || 1;
     const s = new THREE.Shape();
     if (style === 'goggle') {
-      s.absarc(0, 0, 0.052, 0, Math.PI * 2, false);
+      s.absarc(0.030 * grow, 0, 0.034 * grow, 0, Math.PI * 2, false);
     } else if (style === 'sharp') {
-      s.moveTo(-0.012, 0.012);
-      s.lineTo(0.085, 0.052);
-      s.lineTo(0.092, 0.004);
-      s.lineTo(0.02, -0.042);
-      s.lineTo(-0.014, -0.02);
+      // 2099 / 아이언 스파이더 : 각진 렌즈
+      const w = 0.074 * grow, h = 0.046 * grow;
+      s.moveTo(0, -h * 0.15);
+      s.lineTo(w * 0.62, h * 0.95);
+      s.lineTo(w, h * 0.55);
+      s.lineTo(w * 0.88, -h * 0.45);
+      s.lineTo(w * 0.24, -h * 0.72);
       s.closePath();
     } else {
-      const w = style === 'wide' ? 0.105 : 0.088;
-      const h = style === 'wide' ? 0.062 : 0.052;
-      s.moveTo(-0.014, 0.004);
-      s.bezierCurveTo(0.005, h, w * 0.72, h * 1.06, w, h * 0.34);
-      s.bezierCurveTo(w * 1.06, -h * 0.24, w * 0.5, -h * 0.86, 0.012, -h * 0.6);
-      s.bezierCurveTo(-0.012, -h * 0.5, -0.024, -h * 0.16, -0.014, 0.004);
+      const wide = style === 'wide';
+      const w = (wide ? 0.094 : 0.086) * grow;
+      const h = (wide ? 0.060 : 0.054) * grow;
+      // 안쪽 끝은 중심보다 '위'에 있고, 아래 선은 볼록하게 부풀어야 물방울이 된다
+      s.moveTo(0, h * 0.18);                                    // 코 쪽 뾰족한 끝
+      s.bezierCurveTo(w * 0.13, h * 0.74, w * 0.42, h * 1.00, w * 0.72, h * 0.90);
+      s.bezierCurveTo(w * 0.96, h * 0.80, w * 1.02, h * 0.04, w * 0.82, -h * 0.38);
+      s.bezierCurveTo(w * 0.58, -h * 0.62, w * 0.24, -h * 0.02, 0, h * 0.18);
     }
     const g = new THREE.ExtrudeGeometry(s, {
       depth: 0.012, bevelEnabled: true, bevelSize: 0.004,
@@ -78,8 +85,119 @@
     return m;
   }
 
+  /* =====================================================================
+     스킨드 바디로 만드는 최신 경로.
+     BodyGen 이 뼈대에 씌운 "하나의 연속된 살"을 만들어 주므로
+     관절이 조각처럼 끊기지 않는다. 눈/기계팔/후드만 여기서 얹는다.
+     ===================================================================== */
+  function buildSkinned(suitId) {
+    const suit = NS.Suits.byId(suitId);
+    const M = NS.Suits.materials(suit);
+    const P = suit.parts;
+    const pick = k => M[P[k]] || M.p;
+
+    // BodyGen 재질 순서: 0=head 1=chest 2=abdomen 3=upperArm 4=forearm 5=hand 6=thigh 7=shin 8=foot
+    const mats = [
+      P.head === 's' ? M.s : (P.head === 'a' ? M.a : M.head),
+      M.torso,
+      P.abdomen === 's' ? M.s : M.abdomen,
+      pick('upperArm'), pick('forearm'), pick('hand'),
+      pick('thigh'), pick('shin'), pick('foot')
+    ];
+
+    const out = NS.BodyGen.build({ materials: mats, quality: 'high' });
+    const root = out.root;
+    const rig = { root: root, suit: suit, j: out.bones, mesh: out.mesh, skeleton: out.skeleton };
+    const J = rig.j;
+
+    out.mesh.castShadow = true;
+    out.mesh.receiveShadow = false;
+    out.mesh.frustumCulled = false;
+
+    /* ---------------- 눈 (스파이더맨의 상징) ---------------- */
+    /* 머리 단면(눈높이)의 반폭은 약 0.096, 앞면 z 는 약 0.097.
+       렌즈가 그 밖으로 나가면 고글처럼 붕 떠 보이므로 안쪽에 맞춘다. */
+    const HEAD_LOCAL_Y = 0.160;
+    const eyeGrp = new THREE.Group();
+    eyeGrp.position.set(0, HEAD_LOCAL_Y, 0.006);
+    J.head.add(eyeGrp);
+    const ER = 0.090;
+    const goggle = suit.eye === 'goggle';
+    for (let s = -1; s <= 1; s += 2) {
+      // 테두리는 렌즈보다 살짝 크게(=검은 굵은 라인) + 조금 뒤쪽에
+      const rim = eyeMesh(M.eyeRim, suit.eye, s, ER + 0.006, 1.16);
+      const lens = eyeMesh(M.eye, suit.eye, s, ER + 0.010, 1.0);
+      const off = 0.011;
+      rim.position.set(s * off, 0, 0);
+      lens.position.set(s * off, 0, 0);
+      rim.scale.x = s; lens.scale.x = s;
+      rim.rotation.z = s * -0.13;
+      lens.rotation.z = s * -0.13;
+      eyeGrp.add(rim); eyeGrp.add(lens);
+      if (goggle) {
+        const band = new THREE.Mesh(new THREE.TorusGeometry(0.040, 0.008, 8, 20), M.eyeRim);
+        band.position.set(s * 0.041, 0, ER - 0.016);
+        eyeGrp.add(band);
+      }
+    }
+
+    /* ---------------- 후드 (그웬) ---------------- */
+    if (suit.hood) {
+      const hood = new THREE.Mesh(
+        new THREE.SphereGeometry(0.155, 18, 14, 0, Math.PI * 2, 0, Math.PI * 0.62), M.p);
+      hood.position.set(0, 0.15, -0.03);
+      hood.scale.set(1.12, 1.2, 1.2);
+      J.head.add(hood);
+      const collar = new THREE.Mesh(new THREE.TorusGeometry(0.145, 0.045, 8, 18), M.p);
+      collar.position.set(0, 0.3, -0.02);
+      collar.rotation.x = Math.PI / 2;
+      collar.scale.set(1, 1, 1.35);
+      J.chest.add(collar);
+    }
+
+    /* ---------------- 아이언 스파이더 기계팔 ---------------- */
+    if (suit.arms) {
+      rig.ironArms = [];
+      for (let i = 0; i < 4; i++) {
+        const side = i % 2 === 0 ? 1 : -1;
+        const up = i < 2 ? 1 : 0;
+        const a0 = new THREE.Object3D();
+        a0.position.set(side * 0.11, up ? 0.24 : 0.08, -0.1);
+        J.chest.add(a0);
+        const seg = (len, r) => {
+          const g = capsuleGeom(r * 0.72, r, len, 10);
+          const m = new THREE.Mesh(g, M.metalTrim);
+          m.position.y = -len / 2;
+          m.castShadow = true;
+          return m;
+        };
+        a0.add(seg(0.42, 0.035));
+        const a1 = new THREE.Object3D(); a1.position.y = -0.42; a0.add(a1);
+        a1.add(seg(0.4, 0.028));
+        const a2 = new THREE.Object3D(); a2.position.y = -0.4; a1.add(a2);
+        a2.add(seg(0.3, 0.02));
+        const tip = new THREE.Mesh(new THREE.ConeGeometry(0.026, 0.1, 10), M.metalTrim);
+        tip.position.y = -0.34; tip.rotation.x = Math.PI;
+        a2.add(tip);
+        rig.ironArms.push({ a0, a1, a2, phase: i * 1.7, side, up });
+      }
+    }
+
+    /* ---------------- 웹슈터 ---------------- */
+    ['L', 'R'].forEach(sd => {
+      const ws = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.032, 12), M.metalTrim);
+      ws.position.set(0, -0.22, 0.01);
+      ws.rotation.x = Math.PI / 2;
+      J['elbow' + sd].add(ws);
+    });
+
+    rig.pose = {};
+    rig.landTimer = 0;
+    return rig;
+  }
+
   /* --------------------------------------------------------------- build */
-  function build(suitId) {
+  function buildLegacy(suitId) {
     const suit = NS.Suits.byId(suitId);
     const M = NS.Suits.materials(suit);
     const P = suit.parts;
@@ -447,5 +565,14 @@
     return out;
   }
 
-  NS.Character = { build, update, aimArm, handWorld, capsuleGeom };
+  /* BodyGen 이 있으면 스킨드 바디, 없으면 예전 조각 방식으로 폴백 */
+  function build(suitId) {
+    if (NS.BodyGen) {
+      try { return buildSkinned(suitId); }
+      catch (e) { console.warn('스킨드 바디 실패 → 구버전으로 폴백', e); }
+    }
+    return buildLegacy(suitId);
+  }
+
+  NS.Character = { build, update, aimArm, handWorld, capsuleGeom, buildLegacy };
 })();
