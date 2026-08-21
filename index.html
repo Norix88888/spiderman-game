@@ -204,6 +204,7 @@
   #bDive{right:36px; bottom:216px; width:70px; height:70px; font-size:13px}
   #bSuit{right:22px; top:96px; width:56px; height:56px; font-size:12px}
   #bPause{right:22px; top:162px; width:56px; height:56px; font-size:12px}
+  #bMute{right:22px; top:228px; width:56px; height:56px; font-size:17px}
 
   /* ================= 좁은 화면 대응 ================= */
   @media (max-width:820px), (max-height:520px){
@@ -231,6 +232,7 @@
     #hpBar{height:5px}
     #bSuit{top:auto; bottom:296px; right:44px}
     #bPause{top:10px; right:110px; width:44px; height:44px; font-size:10px}
+    #bMute{top:10px; right:160px; width:44px; height:44px; font-size:14px}
     #logo{font-size:34px}
     #suitGrid{grid-template-columns:repeat(2,1fr); gap:8px}
     .suitCard{padding:9px}
@@ -304,6 +306,7 @@
     <div class="g"><kbd>우클릭</kbd>범인 포박 / 웹 짚</div>
     <div class="g"><kbd>Shift</kbd>다이브</div>
     <div class="g"><kbd>Tab</kbd>슈트</div>
+    <div class="g"><kbd>M</kbd>소리</div>
   </div>
 
   <div id="toast"></div>
@@ -330,6 +333,7 @@
   <div class="tbtn" id="bDive">다이브</div>
   <div class="tbtn" id="bSuit">슈트</div>
   <div class="tbtn" id="bPause">| |</div>
+  <div class="tbtn" id="bMute">🔊</div>
 </div>
 
 <div id="rotate">

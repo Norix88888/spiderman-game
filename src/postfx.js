@@ -373,6 +373,8 @@
 
     /* -------------------------------------------------------------- 렌더 */
     function render(dt) {
+      // 통합 측에서 fx.enabled = false 로 끄면 즉시 원본 렌더로 폴백
+      if (!fx.enabled) { renderer.render(scene, camera); return; }
       dt = +dt;
       if (!(dt > 0) || dt > 0.25) dt = 0.016;   // NaN/스파이크 방어
       time += dt;

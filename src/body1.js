@@ -224,12 +224,12 @@
     [0.674, 0.010, 0.022, 0.200, 3.0]
   ];
 
-  /* 엄지: 손바닥 안쪽에서 앞(+Z)으로 비스듬히 */
+  /* 엄지: 손바닥 안쪽에서 앞(+Z)으로 비스듬히. [y, r, cx, cz] */
   var THUMB = [
-    [0.836, 0.020, 0.020, 0.186, 0.012],
-    [0.818, 0.019, 0.019, 0.178, 0.030],
-    [0.800, 0.016, 0.016, 0.172, 0.046],
-    [0.786, 0.011, 0.011, 0.169, 0.056]
+    [0.845, 0.021, 0.190, 0.006],
+    [0.822, 0.020, 0.180, 0.026],
+    [0.802, 0.017, 0.173, 0.044],
+    [0.789, 0.011, 0.170, 0.055]
   ];
 
   /* 다리: 발목 → 골반 오름차순 */
@@ -284,7 +284,6 @@
   function stackY(B, secId, prof, sign, matOf, isTorso) {
     var starts = [], i;
     for (i = 0; i < prof.length; i++) {
-      e = 2 / r[4];
       starts.push(B.ring(secId, i / (prof.length - 1), ringFnY(prof[i], isTorso, sign)));
     }
     for (i = 0; i < starts.length - 1; i++) {
@@ -307,3 +306,205 @@
     for (i = 0; i < starts.length - 1; i++) B.strip(starts[i], starts[i + 1], mat, sign < 0);
     return starts;
   }
+
+  /* 좌/우 이름 치환 헬퍼 */
+  function sideAllow(side, map) {
+    var out = {}, k;
+    for (k in map) if (map.hasOwnProperty(k)) out[k.replace('#', side)] = map[k];
+    return out;
+  }
+
+  function torsoMat(i) {
+    var y = TORSO[i][0];
+    if (y >= 1.495) return MAT_HEAD;
+    if (y >= 1.190) return MAT_CHEST;
+    return MAT_ABS;
+  }
+  function armMat(i) { return ARM[i][0] < 1.13 ? MAT_FARM : MAT_UARM; }
+  function legMat(i) { return LEG[i][0] < 0.48 ? MAT_SHIN : MAT_THIGH; }
+  function handMat() { return MAT_HAND; }
+
+  /* ---------------- 몸통 + 목 + 머리 (하나의 연속 링 스택) ---------------- */
+  function buildTorso(B) {
+    var sec = B.section({
+      hips: 1, spine: 1, chest: 1, neck: 1, head: 1,
+      shoulderL: 0.45, shoulderR: 0.45, hipL: 0.35, hipR: 0.35
+    });
+    var st = stackY(B, sec, TORSO, 1, torsoMat, true);
+    var last = TORSO.length - 1;
+    // 가랑이(아래) 캡 — 허벅지에 묻혀 보이지 않는다
+    B.cap(st[0], B.point(sec, 0, 0.860, 0, 0.5, 0), MAT_ABS, true);
+    // 정수리 캡
+    B.cap(st[last], B.point(sec, 0, 1.856, TORSO[last][3], 0.5, 1), MAT_HEAD, false);
+  }
+
+  /* ---------------- 팔 + 손 (손목 링을 공유해 진짜로 이어붙인다) ---------------- */
+  function buildArm(B, side) {
+    var sg = side === 'L' ? 1 : -1, fl = sg < 0;
+    var secA = B.section(sideAllow(side, {
+      'shoulder#': 1, 'elbow#': 1, 'hand#': 0.9, chest: 0.4
+    }));
+    var secH = B.section(sideAllow(side, { 'hand#': 1, 'elbow#': 0.65 }));
+    var st = stackY(B, secA, ARM, sg, armMat, false);
+    // 어깨 돔 캡 (몸통 안쪽에 파묻힘)
+    B.cap(st[ARM.length - 1], B.point(secA, 0.186 * sg, 1.468, 0, 0.5, 1), MAT_UARM, fl);
+
+    // 손: 첫 링은 팔의 손목 링(st[0])을 그대로 재사용 → 정점 공유 = 용접
+    var prev = st[0], i, cur;
+    for (i = 1; i < HAND.length; i++) {
+      cur = B.ring(secH, i / (HAND.length - 1), ringFnY(HAND[i], false, sg));
+      B.strip(prev, cur, MAT_HAND, !fl);   // 아래로 진행하므로 winding 반전
+      prev = cur;
+    }
+    B.cap(prev, B.point(secH, 0.200 * sg, 0.668, 0, 0.5, 1), MAT_HAND, !fl);
+
+    // 엄지 (손바닥 안쪽 → 앞아래로)
+    var tp = [], j;
+    for (j = THUMB.length - 1; j >= 0; j--) {
+      tp.push(B.ring(secH, j / (THUMB.length - 1), (function (r) {
+        var rr = r[1], cx = r[2] * sg, cz = r[3], y = r[0];
+        return function (c, s) { return [cx + sg * rr * se(c, 1), y, cz + rr * se(s, 1)]; };
+      })(THUMB[j])));
+    }
+    for (j = 0; j < tp.length - 1; j++) B.strip(tp[j], tp[j + 1], MAT_HAND, fl);
+    B.cap(tp[0], B.point(secH, 0.169 * sg, 0.782, 0.060, 0.5, 0), MAT_HAND, !fl);
+    B.cap(tp[tp.length - 1], B.point(secH, 0.192 * sg, 0.852, 0.002, 0.5, 1), MAT_HAND, fl);
+  }
+
+  /* ---------------- 다리 + 발 ---------------- */
+  function buildLeg(B, side) {
+    var sg = side === 'L' ? 1 : -1, fl = sg < 0;
+    var secL = B.section(sideAllow(side, {
+      'hip#': 1, 'knee#': 1, 'foot#': 0.8, hips: 0.45
+    }));
+    var secF = B.section(sideAllow(side, { 'foot#': 1, 'knee#': 0.6 }));
+    var st = stackY(B, secL, LEG, sg, legMat, false);
+    // 발목 아래 캡 (신발 안쪽에 묻힘) / 골반 위 캡 (몸통 안쪽에 묻힘)
+    B.cap(st[0], B.point(secL, 0.105 * sg, 0.040, 0, 0.5, 0), MAT_SHIN, !fl);
+    B.cap(st[LEG.length - 1], B.point(secL, 0.108 * sg, 0.998, 0, 0.5, 1), MAT_THIGH, fl);
+
+    // 신발 (Z축 스택: 발가락 → 뒤꿈치)
+    var fs = stackZ(B, secF, FOOT, sg, 0.105, MAT_FOOT);
+    B.cap(fs[0], B.point(secF, 0.105 * sg, 0.016, 0.224, 0.5, 0), MAT_FOOT, !fl);
+    B.cap(fs[FOOT.length - 1], B.point(secF, 0.105 * sg, 0.046, -0.074, 0.5, 1), MAT_FOOT, fl);
+  }
+
+  /* ===================================================================
+     5. 스키닝 가중치 — 본 선분까지의 거리 기반, 상위 4개 정규화
+     =================================================================== */
+  var POW = 4.0, EPS = 0.02;
+
+  function skinWeights(B, count) {
+    var si = new Uint16Array(count * 4), sw = new Float32Array(count * 4);
+    var bi = {}, i, j;
+    for (i = 0; i < BONE_DEF.length; i++) bi[BONE_DEF[i][0]] = i;
+
+    var cand = [];
+    for (i = 0; i < count; i++) {
+      var px = B.pos[i * 3], py = B.pos[i * 3 + 1], pz = B.pos[i * 3 + 2];
+      var allow = B.sections[B.sec[i]].allow, name, d, w;
+      cand.length = 0;
+      for (name in allow) {
+        if (!allow.hasOwnProperty(name)) continue;
+        d = distSeg(px, py, pz, SEG[name]);
+        w = allow[name] / Math.pow(d + EPS, POW);
+        cand.push({ i: bi[name], w: w });
+      }
+      cand.sort(function (a, b) { return b.w - a.w; });
+      var n = Math.min(4, cand.length), sum = 0;
+      for (j = 0; j < n; j++) sum += cand[j].w;
+      if (sum <= 0) { si[i * 4] = 0; sw[i * 4] = 1; continue; }
+      for (j = 0; j < 4; j++) {
+        if (j < n) { si[i * 4 + j] = cand[j].i; sw[i * 4 + j] = cand[j].w / sum; }
+        else { si[i * 4 + j] = 0; sw[i * 4 + j] = 0; }
+      }
+    }
+    return { index: si, weight: sw };
+  }
+
+  /* ===================================================================
+     6. build — 공개 API
+     =================================================================== */
+  function build(opts) {
+    opts = opts || {};
+    var high = opts.quality !== 'low';
+    var B = new Builder(high ? 18 : 12);
+
+    buildTorso(B);
+    buildArm(B, 'L');
+    buildArm(B, 'R');
+    buildLeg(B, 'L');
+    buildLeg(B, 'R');
+
+    var count = B.pos.length / 3;
+    var skin = skinWeights(B, count);
+
+    /* ---- 지오메트리 ---- */
+    var geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(B.pos, 3));
+    geom.setAttribute('uv', new THREE.Float32BufferAttribute(B.uv, 2));
+    geom.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skin.index, 4));
+    geom.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skin.weight, 4));
+
+    var all = [], start = 0, m, k, bucket;
+    for (m = 0; m < 9; m++) {
+      bucket = B.idx[m];
+      if (!bucket.length) continue;
+      for (k = 0; k < bucket.length; k++) all.push(bucket[k]);
+      geom.addGroup(start, bucket.length, m);   // 0=head 1=chest 2=abdomen ...
+      start += bucket.length;
+    }
+    geom.setIndex(count > 65535
+      ? new THREE.Uint32BufferAttribute(new Uint32Array(all), 1)
+      : new THREE.Uint16BufferAttribute(new Uint16Array(all), 1));
+    geom.computeVertexNormals();
+    geom.computeBoundingSphere();
+
+    /* ---- 재질: r128 은 material.skinning = true 가 필수.
+           원본을 공유하면 일반 Mesh 가 붕괴하므로 반드시 clone 후 켠다. ---- */
+    var src = opts.materials || [];
+    var mats = [], mm;
+    for (m = 0; m < 9; m++) {
+      mm = src[m] || src[src.length - 1];
+      mm = mm ? mm.clone()
+              : new THREE.MeshStandardMaterial({ color: 0x9aa0a8, roughness: 0.7 });
+      mm.skinning = true;
+      mm.flatShading = false;
+      mm.needsUpdate = true;
+      mats.push(mm);
+    }
+
+    /* ---- 본 계층 ---- */
+    var bones = [], map = {}, i, d, b;
+    for (i = 0; i < BONE_DEF.length; i++) {
+      d = BONE_DEF[i];
+      b = new THREE.Bone();
+      b.name = d[0];
+      b.position.set(d[2], d[3], d[4]);
+      map[d[0]] = b;
+      bones.push(b);
+      if (d[1]) map[d[1]].add(b);
+    }
+
+    /* ---- 조립 (r128 규약) ---- */
+    var mesh = new THREE.SkinnedMesh(geom, mats);
+    mesh.name = 'body1';
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;   // 바인드 포즈 바운딩이라 팔 들면 사라짐
+
+    var root = new THREE.Group();
+    root.name = 'body1Root';
+    root.add(mesh);
+    root.add(bones[0]);
+    root.updateMatrixWorld(true);          // 본 월드행렬 확정 후에 역행렬 계산
+
+    var skeleton = new THREE.Skeleton(bones);
+    mesh.bind(skeleton);                   // 인자 1개 — bindMatrix 직접 넘기지 말 것
+    mesh.normalizeSkinWeights();           // 안전장치
+
+    return { mesh: mesh, skeleton: skeleton, root: root, bones: map };
+  }
+
+  NS.BodyGen1 = { build: build };
+})();

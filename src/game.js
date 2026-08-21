@@ -36,13 +36,19 @@
 
   /* ------------------------------------------------------------ 사운드 */
   const sfx = (function () {
-    let ac = null, wind = null, windGain = null;
+    let ac = null, wind = null, windGain = null, muted = false;
     function ctx() {
+      if (muted) return null;
       if (!ac) {
         try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { return null; }
       }
       if (ac.state === 'suspended') ac.resume();
       return ac;
+    }
+    function setMuted(v) {
+      muted = v;
+      if (windGain) windGain.gain.value = 0;
+      return muted;
     }
     function noiseBuf(a, dur) {
       const n = Math.floor(a.sampleRate * dur);
@@ -102,8 +108,10 @@
         g.gain.exponentialRampToValueAtTime(0.001, a.currentTime + 0.18);
         o.connect(g); g.connect(a.destination); o.start(); o.stop(a.currentTime + 0.2);
       },
+      toggleMute() { return setMuted(!muted); },
+      get muted() { return muted; },
       windLevel(v) {
-        const a = ctx(); if (!a) return;
+        const a = ctx(); if (!a) { if (windGain) windGain.gain.value = 0; return; }
         if (!wind) {
           wind = a.createBufferSource();
           wind.buffer = noiseBuf(a, 2); wind.loop = true;
@@ -218,6 +226,10 @@
     btn('bDive', () => { touch.dive = true; }, () => { touch.dive = false; });
     btn('bSuit', () => { togglePicker(); });
     btn('bPause', () => { setPaused(!paused); });
+    btn('bMute', () => {
+      const m = sfx.toggleMute();
+      const b = $('bMute'); if (b) b.textContent = m ? '🔇' : '🔊';
+    });
 
     function checkOrient() {
       document.body.classList.toggle('portrait',
@@ -236,6 +248,7 @@
       if (e.code === 'Space') { input.jump = true; e.preventDefault(); }
       if (e.code === 'KeyR') player && player.respawn();
       if (e.code === 'KeyG') cycleQuality();
+      if (e.code === 'KeyM') toast(sfx.toggleMute() ? '🔇 소리 끔' : '🔊 소리 켬');
       if (e.code === 'KeyP' || e.code === 'Escape') {
         if (el.picker.classList.contains('on')) togglePicker();
         else setPaused(!paused);
